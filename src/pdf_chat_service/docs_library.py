@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import shutil
 
 from pdf_chat_service.document import extract_document_text
 from pdf_chat_service.image import (
@@ -110,6 +111,44 @@ def save_library_upload(*, docs_dir: Path, filename: str | None, file_bytes: byt
     )
 
 
+def archive_library_document(
+    *,
+    docs_dir: Path,
+    archive_dir: Path,
+    document_id: str,
+) -> LibraryDocument:
+    document = resolve_library_document(docs_dir=docs_dir, document_id=document_id)
+    archive_root = prepare_library_directory(archive_dir)
+    target_path = unique_relative_path(root=archive_root, relative_id=document.id)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(document.path), str(target_path))
+    remove_empty_parent_directories(start=document.path.parent, stop=docs_dir.resolve())
+
+    document_type = SUPPORTED_DOCUMENT_SUFFIXES[target_path.suffix.lower()]
+    return LibraryDocument(
+        id=target_path.relative_to(archive_root).as_posix(),
+        name=target_path.name,
+        path=target_path,
+        size_bytes=target_path.stat().st_size,
+        document_type=document_type,
+    )
+
+
+def delete_archived_library_document(
+    *,
+    archive_dir: Path,
+    document_id: str,
+    confirmation: str,
+) -> LibraryDocument:
+    if confirmation != "USUWAM":
+        raise DocumentLibraryError('Type "USUWAM" to delete the archived file.')
+
+    document = resolve_library_document(docs_dir=archive_dir, document_id=document_id)
+    document.path.unlink()
+    remove_empty_parent_directories(start=document.path.parent, stop=archive_dir.resolve())
+    return document
+
+
 def extract_library_document(
     *,
     docs_dir: Path,
@@ -162,6 +201,50 @@ def unique_upload_path(*, root: Path, filename: str) -> Path:
             return candidate
 
     raise DocumentLibraryError("Could not choose a unique filename for the uploaded file.")
+
+
+def prepare_library_directory(directory: Path) -> Path:
+    root = directory.resolve()
+    if root.exists() and not root.is_dir():
+        raise DocumentLibraryError(f"Docs path is not a folder: {directory}")
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def unique_relative_path(*, root: Path, relative_id: str) -> Path:
+    requested_path = Path(relative_id)
+    if requested_path.is_absolute():
+        raise DocumentLibraryError("Document id must be relative to the docs folder.")
+
+    target_path = (root / requested_path).resolve()
+    try:
+        target_path.relative_to(root)
+    except ValueError as exc:
+        raise DocumentLibraryError("Document id must stay inside the docs folder.") from exc
+
+    if not target_path.exists():
+        return target_path
+
+    suffix = target_path.suffix
+    stem = target_path.stem or "document"
+    parent = target_path.parent
+    for counter in range(1, 10_000):
+        candidate = parent / f"{stem}-{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+
+    raise DocumentLibraryError("Could not choose a unique filename for the archived file.")
+
+
+def remove_empty_parent_directories(*, start: Path, stop: Path) -> None:
+    current = start.resolve()
+    stop = stop.resolve()
+    while current != stop:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
 
 
 def resolve_library_document(*, docs_dir: Path, document_id: str) -> LibraryDocument:

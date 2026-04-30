@@ -5,7 +5,9 @@ import pytest
 from pdf_chat_service.docs_library import (
     DocumentLibraryError,
     ExtractedLibraryDocument,
+    archive_library_document,
     build_docs_chat_prompt,
+    delete_archived_library_document,
     list_library_documents,
     resolve_library_document,
     save_library_upload,
@@ -86,6 +88,77 @@ def test_save_library_upload_rejects_unsupported_file(tmp_path: Path) -> None:
             filename="notes.txt",
             file_bytes=b"Notes",
         )
+
+
+def test_archive_library_document_moves_file_to_archive(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    archive_dir = tmp_path / "docs_archive"
+    nested_dir = docs_dir / "nested"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "scan.png").write_bytes(b"image")
+
+    document = archive_library_document(
+        docs_dir=docs_dir,
+        archive_dir=archive_dir,
+        document_id="nested/scan.png",
+    )
+
+    assert document.id == "nested/scan.png"
+    assert document.document_type == "image"
+    assert not (nested_dir / "scan.png").exists()
+    assert not nested_dir.exists()
+    assert (archive_dir / "nested" / "scan.png").read_bytes() == b"image"
+
+
+def test_archive_library_document_suffixes_duplicate_archive_file(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    archive_dir = tmp_path / "docs_archive"
+    docs_dir.mkdir()
+    archive_dir.mkdir()
+    (docs_dir / "notes.md").write_bytes(b"new")
+    (archive_dir / "notes.md").write_bytes(b"old")
+
+    document = archive_library_document(
+        docs_dir=docs_dir,
+        archive_dir=archive_dir,
+        document_id="notes.md",
+    )
+
+    assert document.id == "notes-1.md"
+    assert (archive_dir / "notes.md").read_bytes() == b"old"
+    assert (archive_dir / "notes-1.md").read_bytes() == b"new"
+
+
+def test_delete_archived_library_document_requires_confirmation(tmp_path: Path) -> None:
+    archive_dir = tmp_path / "docs_archive"
+    archive_dir.mkdir()
+    (archive_dir / "notes.md").write_bytes(b"notes")
+
+    with pytest.raises(DocumentLibraryError, match="USUWAM"):
+        delete_archived_library_document(
+            archive_dir=archive_dir,
+            document_id="notes.md",
+            confirmation="DELETE",
+        )
+
+    assert (archive_dir / "notes.md").exists()
+
+
+def test_delete_archived_library_document_removes_file(tmp_path: Path) -> None:
+    archive_dir = tmp_path / "docs_archive"
+    nested_dir = archive_dir / "nested"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "notes.md").write_bytes(b"notes")
+
+    document = delete_archived_library_document(
+        archive_dir=archive_dir,
+        document_id="nested/notes.md",
+        confirmation="USUWAM",
+    )
+
+    assert document.id == "nested/notes.md"
+    assert not (nested_dir / "notes.md").exists()
+    assert not nested_dir.exists()
 
 
 def test_build_docs_chat_prompt_requires_source_sentence_answer() -> None:

@@ -12,7 +12,10 @@ from pdf_chat_service.config import Settings
 from pdf_chat_service.document import DocumentExtractionError, extract_document_text
 from pdf_chat_service.docs_library import (
     DocumentLibraryError,
+    LibraryDocument,
+    archive_library_document,
     build_docs_chat_prompt,
+    delete_archived_library_document,
     extract_library_document,
     list_library_documents,
     save_library_upload,
@@ -50,6 +53,10 @@ class DocsChatRequest(BaseModel):
     model: str | None = None
 
 
+class DeleteArchivedDocumentRequest(BaseModel):
+    confirmation: str = Field(..., min_length=1)
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -64,15 +71,7 @@ async def list_docs_files() -> dict[str, Any]:
 
     return {
         "docs_dir": str(settings.docs_dir),
-        "files": [
-            {
-                "id": document.id,
-                "name": document.name,
-                "size_bytes": document.size_bytes,
-                "document_type": document.document_type,
-            }
-            for document in documents
-        ],
+        "files": [library_document_payload(document) for document in documents],
     }
 
 
@@ -104,16 +103,52 @@ async def upload_docs_files(files: list[UploadFile] = File(...)) -> dict[str, An
 
     return {
         "docs_dir": str(settings.docs_dir),
-        "files": [
-            {
-                "id": document.id,
-                "name": document.name,
-                "size_bytes": document.size_bytes,
-                "document_type": document.document_type,
-            }
-            for document in documents
-        ],
+        "files": [library_document_payload(document) for document in documents],
     }
+
+
+@app.get("/api/docs/archive")
+async def list_docs_archive() -> dict[str, Any]:
+    try:
+        documents = list_library_documents(settings.docs_archive_dir)
+    except DocumentLibraryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "archive_dir": str(settings.docs_archive_dir),
+        "files": [library_document_payload(document) for document in documents],
+    }
+
+
+@app.post("/api/docs/files/{document_id:path}/archive")
+async def archive_docs_file(document_id: str) -> dict[str, Any]:
+    try:
+        document = archive_library_document(
+            docs_dir=settings.docs_dir,
+            archive_dir=settings.docs_archive_dir,
+            document_id=document_id,
+        )
+    except DocumentLibraryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"file": library_document_payload(document)}
+
+
+@app.delete("/api/docs/archive/{document_id:path}")
+async def delete_archived_docs_file(
+    document_id: str,
+    request: DeleteArchivedDocumentRequest,
+) -> dict[str, Any]:
+    try:
+        document = delete_archived_library_document(
+            archive_dir=settings.docs_archive_dir,
+            document_id=document_id,
+            confirmation=request.confirmation,
+        )
+    except DocumentLibraryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"deleted": 1, "file": library_document_payload(document)}
 
 
 @app.get("/api/docs/history")
@@ -322,6 +357,15 @@ def unique_document_ids(document_ids: list[str]) -> list[str]:
             unique_ids.append(normalized_id)
             seen.add(normalized_id)
     return unique_ids
+
+
+def library_document_payload(document: LibraryDocument) -> dict[str, Any]:
+    return {
+        "id": document.id,
+        "name": document.name,
+        "size_bytes": document.size_bytes,
+        "document_type": document.document_type,
+    }
 
 
 def frontend_dist_path() -> Path:

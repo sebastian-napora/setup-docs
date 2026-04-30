@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     image_chat_thinking: bool = False
     compress_url: str = "http://0.0.0.0:11112/compress"
     docs_dir: Path = Path("docs")
+    docs_archive_dir: Path = Path("docs_archive")
     response_dir: Path = Path("response")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

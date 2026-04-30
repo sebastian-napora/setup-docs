@@ -141,8 +141,9 @@ in `./response`. The API response includes the generated path:
 ## React Docs App
 
 The React app lists PDF, Markdown, and image files from `./docs`, lets you add files
-into that folder, select files with checkboxes, and send the selected text plus your
-question to the model.
+into that folder, archive files into `./docs_archive`, permanently delete archived
+files after typing `USUWAM`, select files with checkboxes, and send the selected text
+plus your question to the model.
 
 Start both together:
 
@@ -175,6 +176,9 @@ The app calls these API routes:
 ```text
 GET  /api/docs/files
 POST /api/docs/files
+POST /api/docs/files/{document_id}/archive
+GET  /api/docs/archive
+DELETE /api/docs/archive/{document_id}
 POST /api/docs/chat
 ```
 
@@ -246,6 +250,7 @@ export IMAGE_CHAT_URL="http://0.0.0.0:11112/v1/chat/image"
 export IMAGE_CHAT_THINKING="false"
 export COMPRESS_URL="http://0.0.0.0:11112/compress"
 export DOCS_DIR="docs"
+export DOCS_ARCHIVE_DIR="docs_archive"
 export RESPONSE_DIR="response"
 ```
 

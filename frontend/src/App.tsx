@@ -32,6 +32,11 @@ type DocsUploadResponse = {
   detail?: ApiDetail
 }
 
+type DocsFileActionResponse = {
+  file?: DocsFile
+  detail?: ApiDetail
+}
+
 type DocsChatFileMeta = {
   id: string
   name: string
@@ -113,6 +118,20 @@ type Translations = {
   searchFiles: string
   loadingFiles: string
   noDocsFiles: string
+  archiveHeading: string
+  archived: (count: number) => string
+  loadingArchive: string
+  noArchivedFiles: string
+  archiveFileTitle: string
+  archiveFileAria: string
+  deleteArchivedTitle: string
+  deleteArchivedAria: string
+  deleteFileModalTitle: string
+  deleteFileModalText: (filename: string) => string
+  deleteConfirmationLabel: string
+  deleteConfirmationPlaceholder: string
+  cancel: string
+  deleteForever: string
   questionHeading: string
   filesInContext: (count: number) => string
   promptPlaceholder: string
@@ -150,6 +169,9 @@ type Translations = {
   deleteHistoryError: string
   clearHistoryError: string
   uploadFilesError: string
+  archiveFilesError: string
+  loadArchiveError: string
+  deleteArchivedError: string
   unexpectedError: string
 }
 
@@ -172,6 +194,20 @@ const TRANSLATIONS: Record<Language, Translations> = {
     searchFiles: 'Szukaj plików',
     loadingFiles: 'Ładowanie plików',
     noDocsFiles: 'Brak plików PDF, Markdown lub obrazów',
+    archiveHeading: 'Archiwum',
+    archived: (count) => `${count} w archiwum`,
+    loadingArchive: 'Ładowanie archiwum',
+    noArchivedFiles: 'Archiwum jest puste',
+    archiveFileTitle: 'Przenieś do archiwum',
+    archiveFileAria: 'Przenieś plik do archiwum',
+    deleteArchivedTitle: 'Usuń na zawsze',
+    deleteArchivedAria: 'Usuń zarchiwizowany plik na zawsze',
+    deleteFileModalTitle: 'Usuń plik na zawsze',
+    deleteFileModalText: (filename) => `Aby usunąć "${filename}", wpisz USUWAM i naciśnij Enter.`,
+    deleteConfirmationLabel: 'Potwierdzenie',
+    deleteConfirmationPlaceholder: 'USUWAM',
+    cancel: 'Anuluj',
+    deleteForever: 'Usuń',
     questionHeading: 'Pytanie',
     filesInContext: (count) => `${pluralFilesPl(count)} w kontekście`,
     promptPlaceholder: 'np. data urodzin córki',
@@ -209,6 +245,9 @@ const TRANSLATIONS: Record<Language, Translations> = {
     deleteHistoryError: 'Nie udało się usunąć wpisu historii.',
     clearHistoryError: 'Nie udało się wyczyścić historii.',
     uploadFilesError: 'Nie udało się dodać plików.',
+    archiveFilesError: 'Nie udało się przenieść pliku do archiwum.',
+    loadArchiveError: 'Nie udało się załadować archiwum.',
+    deleteArchivedError: 'Nie udało się usunąć pliku z archiwum.',
     unexpectedError: 'Wystąpił nieoczekiwany błąd.',
   },
   en: {
@@ -225,6 +264,20 @@ const TRANSLATIONS: Record<Language, Translations> = {
     searchFiles: 'Search files',
     loadingFiles: 'Loading files',
     noDocsFiles: 'No PDF, Markdown, or image files',
+    archiveHeading: 'Archive',
+    archived: (count) => `${count} archived`,
+    loadingArchive: 'Loading archive',
+    noArchivedFiles: 'Archive is empty',
+    archiveFileTitle: 'Move to archive',
+    archiveFileAria: 'Move file to archive',
+    deleteArchivedTitle: 'Delete forever',
+    deleteArchivedAria: 'Delete archived file forever',
+    deleteFileModalTitle: 'Delete file forever',
+    deleteFileModalText: (filename) => `To delete "${filename}", type USUWAM and press Enter.`,
+    deleteConfirmationLabel: 'Confirmation',
+    deleteConfirmationPlaceholder: 'USUWAM',
+    cancel: 'Cancel',
+    deleteForever: 'Delete',
     questionHeading: 'Question',
     filesInContext: (count) => `${count} files in context`,
     promptPlaceholder: 'e.g. daughter birth date',
@@ -262,6 +315,9 @@ const TRANSLATIONS: Record<Language, Translations> = {
     deleteHistoryError: 'Could not delete history item.',
     clearHistoryError: 'Could not clear history.',
     uploadFilesError: 'Could not add files.',
+    archiveFilesError: 'Could not move file to archive.',
+    loadArchiveError: 'Could not load archive.',
+    deleteArchivedError: 'Could not delete archived file.',
     unexpectedError: 'Unexpected error.',
   },
 }
@@ -270,6 +326,7 @@ function App() {
   const uploadInputRef = useRef<HTMLInputElement | null>(null)
   const [language, setLanguage] = useState<Language>(getInitialLanguage)
   const [documents, setDocuments] = useState<DocsFile[]>([])
+  const [archivedDocuments, setArchivedDocuments] = useState<DocsFile[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [query, setQuery] = useState('')
   const [prompt, setPrompt] = useState('')
@@ -279,9 +336,14 @@ function App() {
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [isLoadingDocs, setIsLoadingDocs] = useState(true)
+  const [isLoadingArchive, setIsLoadingArchive] = useState(true)
   const [isLoadingHistory, setIsLoadingHistory] = useState(true)
   const [isAsking, setIsAsking] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
+  const [archivingId, setArchivingId] = useState<string | null>(null)
+  const [deleteCandidate, setDeleteCandidate] = useState<DocsFile | null>(null)
+  const [deleteConfirmation, setDeleteConfirmation] = useState('')
+  const [isDeletingArchived, setIsDeletingArchived] = useState(false)
   const t = TRANSLATIONS[language]
 
   useEffect(() => {
@@ -307,6 +369,12 @@ function App() {
           throw new Error(readApiError(historyData.detail, t.loadHistoryError))
         }
 
+        const archiveResponse = await fetch(`${API_BASE_URL}/api/docs/archive`)
+        const archiveData = (await archiveResponse.json()) as DocsFilesResponse
+        if (!archiveResponse.ok) {
+          throw new Error(readApiError(archiveData.detail, t.loadArchiveError))
+        }
+
         if (cancelled) {
           return
         }
@@ -318,6 +386,7 @@ function App() {
           return new Set([...currentSelection].filter((id) => availableIds.has(id)))
         })
         setHistoryItems(Array.isArray(historyData.items) ? historyData.items : [])
+        setArchivedDocuments(Array.isArray(archiveData.files) ? archiveData.files : [])
       } catch (loadError) {
         if (!cancelled) {
           setError(errorMessage(loadError, t.unexpectedError))
@@ -325,6 +394,7 @@ function App() {
       } finally {
         if (!cancelled) {
           setIsLoadingDocs(false)
+          setIsLoadingArchive(false)
           setIsLoadingHistory(false)
         }
       }
@@ -335,7 +405,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [t.loadFilesError, t.loadHistoryError, t.unexpectedError])
+  }, [t.loadArchiveError, t.loadFilesError, t.loadHistoryError, t.unexpectedError])
 
   const filteredDocuments = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -377,6 +447,25 @@ function App() {
       setError(errorMessage(loadError, t.unexpectedError))
     } finally {
       setIsLoadingDocs(false)
+    }
+  }
+
+  async function loadArchive() {
+    setIsLoadingArchive(true)
+    setError('')
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/docs/archive`)
+      const data = (await response.json()) as DocsFilesResponse
+      if (!response.ok) {
+        throw new Error(readApiError(data.detail, t.loadArchiveError))
+      }
+
+      setArchivedDocuments(Array.isArray(data.files) ? data.files : [])
+    } catch (loadError) {
+      setError(errorMessage(loadError, t.unexpectedError))
+    } finally {
+      setIsLoadingArchive(false)
     }
   }
 
@@ -458,6 +547,98 @@ function App() {
       if (uploadInputRef.current) {
         uploadInputRef.current.value = ''
       }
+    }
+  }
+
+  async function archiveDocument(documentFile: DocsFile) {
+    if (archivingId) {
+      return
+    }
+
+    setArchivingId(documentFile.id)
+    setError('')
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/docs/files/${encodeDocumentId(documentFile.id)}/archive`,
+        { method: 'POST' },
+      )
+      const data = (await response.json()) as DocsFileActionResponse
+      if (!response.ok) {
+        throw new Error(readApiError(data.detail, t.archiveFilesError))
+      }
+
+      setDocuments((currentDocuments) =>
+        currentDocuments.filter((document) => document.id !== documentFile.id),
+      )
+      setSelectedIds((currentSelection) => {
+        const nextSelection = new Set(currentSelection)
+        nextSelection.delete(documentFile.id)
+        return nextSelection
+      })
+
+      if (data.file) {
+        setArchivedDocuments((currentDocuments) => [
+          data.file as DocsFile,
+          ...currentDocuments.filter((document) => document.id !== data.file?.id),
+        ])
+      } else {
+        void loadArchive()
+      }
+    } catch (archiveError) {
+      setError(errorMessage(archiveError, t.unexpectedError))
+    } finally {
+      setArchivingId(null)
+    }
+  }
+
+  function openDeleteArchivedModal(documentFile: DocsFile) {
+    setDeleteCandidate(documentFile)
+    setDeleteConfirmation('')
+  }
+
+  function closeDeleteArchivedModal() {
+    if (isDeletingArchived) {
+      return
+    }
+    setDeleteCandidate(null)
+    setDeleteConfirmation('')
+  }
+
+  async function deleteArchivedDocument(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!deleteCandidate || deleteConfirmation !== 'USUWAM' || isDeletingArchived) {
+      return
+    }
+
+    setIsDeletingArchived(true)
+    setError('')
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/docs/archive/${encodeDocumentId(deleteCandidate.id)}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ confirmation: deleteConfirmation }),
+        },
+      )
+      const data = (await response.json()) as DocsFileActionResponse
+      if (!response.ok) {
+        throw new Error(readApiError(data.detail, t.deleteArchivedError))
+      }
+
+      setArchivedDocuments((currentDocuments) =>
+        currentDocuments.filter((document) => document.id !== deleteCandidate.id),
+      )
+      setDeleteCandidate(null)
+      setDeleteConfirmation('')
+    } catch (deleteError) {
+      setError(errorMessage(deleteError, t.unexpectedError))
+    } finally {
+      setIsDeletingArchived(false)
     }
   }
 
@@ -601,6 +782,7 @@ function App() {
             type="button"
             onClick={() => {
               void loadDocuments()
+              void loadArchive()
               void loadHistory()
             }}
             title={t.refreshAllTitle}
@@ -667,11 +849,12 @@ function App() {
             ) : null}
 
             {filteredDocuments.map((document) => (
-              <label className="file-row" key={document.id} role="listitem">
+              <article className="file-row" key={document.id} role="listitem">
                 <input
                   type="checkbox"
                   checked={selectedIds.has(document.id)}
                   onChange={() => toggleDocument(document.id)}
+                  aria-label={document.name}
                 />
                 <DocumentTypeIcon documentType={document.document_type} />
                 <span className="file-copy">
@@ -681,9 +864,62 @@ function App() {
                     {formatBytes(document.size_bytes)}
                   </span>
                 </span>
-              </label>
+                <button
+                  className="file-archive"
+                  type="button"
+                  onClick={() => void archiveDocument(document)}
+                  disabled={archivingId === document.id}
+                  title={t.archiveFileTitle}
+                  aria-label={`${t.archiveFileAria}: ${document.name}`}
+                >
+                  {archivingId === document.id ? (
+                    <Loader2 className="spin" size={15} />
+                  ) : (
+                    <Trash2 size={15} />
+                  )}
+                </button>
+              </article>
             ))}
           </div>
+
+          <section className="archive-section" aria-labelledby="archive-heading">
+            <div className="archive-header">
+              <h3 id="archive-heading">{t.archiveHeading}</h3>
+              <span>{t.archived(archivedDocuments.length)}</span>
+            </div>
+
+            <div className="archive-list" role="list">
+              {isLoadingArchive ? (
+                <StatusLine icon={<Loader2 className="spin" size={18} />} text={t.loadingArchive} />
+              ) : null}
+
+              {!isLoadingArchive && !archivedDocuments.length ? (
+                <StatusLine icon={<Trash2 size={18} />} text={t.noArchivedFiles} />
+              ) : null}
+
+              {archivedDocuments.map((document) => (
+                <article className="archive-row" key={document.id} role="listitem">
+                  <DocumentTypeIcon documentType={document.document_type} />
+                  <span className="file-copy">
+                    <strong>{document.name}</strong>
+                    <span>
+                      {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
+                      {formatBytes(document.size_bytes)}
+                    </span>
+                  </span>
+                  <button
+                    className="file-delete"
+                    type="button"
+                    onClick={() => openDeleteArchivedModal(document)}
+                    title={t.deleteArchivedTitle}
+                    aria-label={`${t.deleteArchivedAria}: ${document.name}`}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
         </section>
 
         <section className="chat-column" aria-labelledby="question-heading">
@@ -816,6 +1052,47 @@ function App() {
           </div>
         </section>
       </main>
+
+      {deleteCandidate ? (
+        <div className="modal-backdrop">
+          <form
+            className="confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-file-modal-title"
+            onSubmit={deleteArchivedDocument}
+          >
+            <div>
+              <h2 id="delete-file-modal-title">{t.deleteFileModalTitle}</h2>
+              <p>{t.deleteFileModalText(deleteCandidate.name)}</p>
+            </div>
+
+            <label className="confirm-field">
+              <span>{t.deleteConfirmationLabel}</span>
+              <input
+                autoFocus
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+                placeholder={t.deleteConfirmationPlaceholder}
+              />
+            </label>
+
+            <div className="modal-actions">
+              <button type="button" onClick={closeDeleteArchivedModal}>
+                {t.cancel}
+              </button>
+              <button
+                className="danger-button"
+                type="submit"
+                disabled={deleteConfirmation !== 'USUWAM' || isDeletingArchived}
+              >
+                {isDeletingArchived ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+                {t.deleteForever}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -831,10 +1108,10 @@ function StatusLine({ icon, text }: { icon: ReactNode; text: string }) {
 
 function DocumentTypeIcon({ documentType }: { documentType: string }) {
   if (documentType === 'image') {
-    return <ImageIcon size={19} aria-hidden="true" />
+    return <ImageIcon className="file-type-icon" size={19} aria-hidden="true" />
   }
 
-  return <FileText size={19} aria-hidden="true" />
+  return <FileText className="file-type-icon" size={19} aria-hidden="true" />
 }
 
 function formatDocumentType(documentType: string, language: Language) {
@@ -955,6 +1232,10 @@ function readApiError(detail: ApiDetail | undefined, fallback: string) {
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
+}
+
+function encodeDocumentId(documentId: string) {
+  return documentId.split('/').map(encodeURIComponent).join('/')
 }
 
 function parseDisplayAnswer(rawAnswer: string): DisplayAnswer {

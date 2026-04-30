@@ -55,3 +55,70 @@ def test_upload_docs_files_rejects_unsupported_file(
     assert response.status_code == 400
     assert "PDF, Markdown, and image" in response.json()["detail"]
     assert not (tmp_path / "docs").exists()
+
+
+def test_archive_docs_file_moves_file_to_archive(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    docs_dir = tmp_path / "docs"
+    archive_dir = tmp_path / "docs_archive"
+    docs_dir.mkdir()
+    (docs_dir / "notes.md").write_bytes(b"Notes")
+    monkeypatch.setattr(app_module.settings, "docs_dir", docs_dir)
+    monkeypatch.setattr(app_module.settings, "docs_archive_dir", archive_dir)
+    client = TestClient(app_module.app)
+
+    response = client.post("/api/docs/files/notes.md/archive")
+
+    assert response.status_code == 200
+    assert response.json()["file"] == {
+        "id": "notes.md",
+        "name": "notes.md",
+        "size_bytes": 5,
+        "document_type": "markdown",
+    }
+    assert not (docs_dir / "notes.md").exists()
+    assert (archive_dir / "notes.md").read_bytes() == b"Notes"
+
+
+def test_delete_archived_docs_file_requires_confirmation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    archive_dir = tmp_path / "docs_archive"
+    archive_dir.mkdir()
+    (archive_dir / "notes.md").write_bytes(b"Notes")
+    monkeypatch.setattr(app_module.settings, "docs_archive_dir", archive_dir)
+    client = TestClient(app_module.app)
+
+    response = client.request(
+        "DELETE",
+        "/api/docs/archive/notes.md",
+        json={"confirmation": "DELETE"},
+    )
+
+    assert response.status_code == 400
+    assert "USUWAM" in response.json()["detail"]
+    assert (archive_dir / "notes.md").exists()
+
+
+def test_delete_archived_docs_file_removes_file(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    archive_dir = tmp_path / "docs_archive"
+    archive_dir.mkdir()
+    (archive_dir / "notes.md").write_bytes(b"Notes")
+    monkeypatch.setattr(app_module.settings, "docs_archive_dir", archive_dir)
+    client = TestClient(app_module.app)
+
+    response = client.request(
+        "DELETE",
+        "/api/docs/archive/notes.md",
+        json={"confirmation": "USUWAM"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["deleted"] == 1
+    assert not (archive_dir / "notes.md").exists()
