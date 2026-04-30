@@ -10,6 +10,7 @@ from pdf_chat_service.docs_library import (
     build_docs_source_search_prompt,
     delete_archived_library_document,
     list_library_documents,
+    rename_library_document,
     resolve_library_document,
     save_library_upload,
     search_extracted_documents,
@@ -161,6 +162,57 @@ def test_delete_archived_library_document_removes_file(tmp_path: Path) -> None:
     assert document.id == "nested/notes.md"
     assert not (nested_dir / "notes.md").exists()
     assert not nested_dir.exists()
+
+
+def test_rename_library_document_preserves_extension(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "example.md").write_text("# Notes", encoding="utf-8")
+
+    document = rename_library_document(
+        docs_dir=docs_dir,
+        document_id="example.md",
+        new_stem="changed",
+    )
+
+    assert document.id == "changed.md"
+    assert document.name == "changed.md"
+    assert document.document_type == "markdown"
+    assert not (docs_dir / "example.md").exists()
+    assert (docs_dir / "changed.md").read_text(encoding="utf-8") == "# Notes"
+
+
+def test_rename_library_document_accepts_accidental_extension_input(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "example.md").write_text("# Notes", encoding="utf-8")
+
+    document = rename_library_document(
+        docs_dir=docs_dir,
+        document_id="example.md",
+        new_stem="changed.md",
+    )
+
+    assert document.id == "changed.md"
+    assert (docs_dir / "changed.md").exists()
+    assert not (docs_dir / "changed.md.md").exists()
+
+
+def test_rename_library_document_rejects_duplicate_name(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "example.md").write_text("old", encoding="utf-8")
+    (docs_dir / "changed.md").write_text("existing", encoding="utf-8")
+
+    with pytest.raises(DocumentLibraryError, match="already exists"):
+        rename_library_document(
+            docs_dir=docs_dir,
+            document_id="example.md",
+            new_stem="changed",
+        )
+
+    assert (docs_dir / "example.md").read_text(encoding="utf-8") == "old"
+    assert (docs_dir / "changed.md").read_text(encoding="utf-8") == "existing"
 
 
 def test_build_docs_chat_prompt_requires_source_sentence_answer() -> None:

@@ -244,7 +244,7 @@
 
 .file-row {
   display: grid;
-  grid-template-columns: 20px 22px minmax(0, 1fr) 32px;
+  grid-template-columns: 20px 22px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-height: 62px;
@@ -364,20 +364,91 @@
   color: #2864b4;
 }
 
+.file-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.file-rename,
 .file-archive,
-.file-delete {
+.file-delete,
+.file-cancel,
+.file-confirm {
   width: 32px;
   min-height: 32px;
   border-color: transparent;
   background: transparent;
-  color: #9f1d1d;
   padding: 0;
 }
 
+.file-rename {
+  color: #2864b4;
+}
+
+.file-archive,
+.file-delete,
+.file-cancel {
+  color: #9f1d1d;
+}
+
+.file-confirm {
+  color: #28715f;
+}
+
+.file-rename:hover:not(:disabled) {
+  border-color: #9bbbe0;
+  background: #eef6ff;
+}
+
 .file-archive:hover:not(:disabled),
+.file-cancel:hover:not(:disabled),
 .file-delete:hover:not(:disabled) {
   border-color: #f1a0a0;
   background: #fff5f5;
+}
+
+.file-confirm:hover:not(:disabled) {
+  border-color: #9fc9bc;
+  background: #f0faf6;
+}
+
+.rename-field {
+  display: flex;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  border: 1px solid #cbd3dd;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.rename-field:focus-within {
+  border-color: #2864b4;
+  box-shadow: 0 0 0 3px rgb(40 100 180 / 14%);
+}
+
+.rename-field input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  border: 0;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 800;
+  outline: 0;
+  padding: 0 10px;
+}
+
+.rename-field span {
+  flex: 0 0 auto;
+  border-left: 1px solid #e1e7ef;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 9px 10px;
 }
 
 .archive-section {
@@ -784,7 +855,7 @@ textarea:focus,
   }
 
   .file-row {
-    grid-template-columns: 20px minmax(0, 1fr) 32px;
+    grid-template-columns: 20px minmax(0, 1fr) auto;
   }
 
   .archive-row {

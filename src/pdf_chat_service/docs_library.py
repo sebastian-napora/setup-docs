@@ -224,6 +224,37 @@ def delete_archived_library_document(
     return document
 
 
+def rename_library_document(
+    *,
+    docs_dir: Path,
+    document_id: str,
+    new_stem: str,
+) -> LibraryDocument:
+    document = resolve_library_document(docs_dir=docs_dir, document_id=document_id)
+    clean_stem = normalize_rename_stem(new_stem=new_stem, suffix=document.path.suffix)
+    target_path = (document.path.parent / f"{clean_stem}{document.path.suffix}").resolve()
+    root = docs_dir.resolve()
+    try:
+        target_path.relative_to(root)
+    except ValueError as exc:
+        raise DocumentLibraryError("Document id must stay inside the docs folder.") from exc
+
+    if target_path == document.path.resolve():
+        return document
+    if target_path.exists():
+        raise DocumentLibraryError("A file with this name already exists.")
+
+    document.path.rename(target_path)
+    document_type = SUPPORTED_DOCUMENT_SUFFIXES[target_path.suffix.lower()]
+    return LibraryDocument(
+        id=target_path.relative_to(root).as_posix(),
+        name=target_path.name,
+        path=target_path,
+        size_bytes=target_path.stat().st_size,
+        document_type=document_type,
+    )
+
+
 def extract_library_document(
     *,
     docs_dir: Path,
@@ -261,6 +292,18 @@ def normalize_upload_filename(filename: str | None) -> str:
     if not clean_name:
         raise DocumentLibraryError("Uploaded file must have a filename.")
     return clean_name
+
+
+def normalize_rename_stem(*, new_stem: str, suffix: str) -> str:
+    raw_stem = Path(new_stem.replace("\\", "/")).name.strip()
+    if suffix and raw_stem.lower().endswith(suffix.lower()):
+        raw_stem = raw_stem[: -len(suffix)]
+    clean_stem = UPLOAD_FILENAME_PATTERN.sub("_", raw_stem)
+    clean_stem = re.sub(r"\s+", " ", clean_stem).strip()
+    clean_stem = clean_stem.strip(".")
+    if not clean_stem:
+        raise DocumentLibraryError("File name cannot be empty.")
+    return clean_stem
 
 
 def unique_upload_path(*, root: Path, filename: str) -> Path:

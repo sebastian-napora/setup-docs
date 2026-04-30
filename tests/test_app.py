@@ -66,10 +66,18 @@ def test_upload_docs_files_embeds_when_requested(
     rag_database_path = tmp_path / "rag_data" / "rag.sqlite3"
     monkeypatch.setattr(app_module.settings, "docs_dir", docs_dir)
     monkeypatch.setattr(app_module.settings, "rag_database_path", rag_database_path)
+    monkeypatch.setattr(
+        app_module.settings,
+        "chat_completions_url",
+        "http://192.168.0.80:11112/v1/chat/completions",
+    )
+    monkeypatch.setattr(app_module.settings, "local_rag_ingest_url", None)
     embedded_document_ids: list[str] = []
+    ingest_urls: list[str] = []
 
     async def fake_create_library_document_embeddings(**kwargs):
         embedded_document_ids.append(kwargs["document_id"])
+        ingest_urls.append(kwargs["local_rag_ingest_url"])
         return LibraryDocumentEmbeddingResult(
             file_id=kwargs["document_id"],
             name=kwargs["document_id"],
@@ -93,6 +101,7 @@ def test_upload_docs_files_embeds_when_requested(
 
     assert response.status_code == 200
     assert embedded_document_ids == ["notes.md"]
+    assert ingest_urls == ["http://192.168.0.80:11112/local_rag/ingest"]
     assert response.json()["embeddings"] == [
         {
             "file_id": "notes.md",
@@ -127,6 +136,29 @@ def test_archive_docs_file_moves_file_to_archive(
     }
     assert not (docs_dir / "notes.md").exists()
     assert (archive_dir / "notes.md").read_bytes() == b"Notes"
+
+
+def test_rename_docs_file_preserves_extension(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "notes.md").write_bytes(b"Notes")
+    monkeypatch.setattr(app_module.settings, "docs_dir", docs_dir)
+    client = TestClient(app_module.app)
+
+    response = client.patch("/api/docs/files/notes.md", json={"name": "renamed"})
+
+    assert response.status_code == 200
+    assert response.json()["file"] == {
+        "id": "renamed.md",
+        "name": "renamed.md",
+        "size_bytes": 5,
+        "document_type": "markdown",
+    }
+    assert not (docs_dir / "notes.md").exists()
+    assert (docs_dir / "renamed.md").read_bytes() == b"Notes"
 
 
 def test_delete_archived_docs_file_requires_confirmation(
@@ -265,3 +297,62 @@ def test_search_docs_sources_uses_all_documents_when_files_are_not_selected(
     payload = response.json()
     assert {file["id"] for file in payload["request"]["files"]} == {"billing.md", "login.md"}
     assert {source["file_id"] for source in payload["sources"]} == {"billing.md", "login.md"}
+
+
+def test_search_docs_embeddings_uses_local_rag_query(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    docs_dir = tmp_path / "docs"
+    response_dir = tmp_path / "response"
+    docs_dir.mkdir()
+    (docs_dir / "login.md").write_text("Login notes", encoding="utf-8")
+    monkeypatch.setattr(app_module.settings, "docs_dir", docs_dir)
+    monkeypatch.setattr(app_module.settings, "response_dir", response_dir)
+    monkeypatch.setattr(
+        app_module.settings,
+        "chat_completions_url",
+        "http://192.168.0.80:11112/v1/chat/completions",
+    )
+    monkeypatch.setattr(app_module.settings, "local_rag_query_url", None)
+    query_urls: list[str] = []
+    prompts: list[str] = []
+
+    async def fake_post_local_rag_query(**kwargs):
+        query_urls.append(kwargs["query_url"])
+        prompts.append(kwargs["prompt"])
+        return {
+            "answer": "The login context was found through embeddings.",
+            "sources": [
+                {
+                    "source": "login.md",
+                    "text": "Login failed because the session token expired.",
+                    "score": 0.91,
+                    "metadata": {
+                        "file_id": "login.md",
+                        "name": "login.md",
+                        "document_type": "markdown",
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr(app_module, "post_local_rag_query", fake_post_local_rag_query)
+    client = TestClient(app_module.app)
+
+    response = client.post(
+        "/api/docs/embedding-search",
+        json={
+            "files": ["login.md"],
+            "prompt": "expired token login",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert query_urls == ["http://192.168.0.80:11112/local_rag/query"]
+    assert prompts == ["expired token login"]
+    assert payload["request"]["mode"] == "embedding_search"
+    assert payload["answer"] == "The login context was found through embeddings."
+    assert payload["sources"][0]["file_id"] == "login.md"
+    assert "session token expired" in payload["sources"][0]["quote"]

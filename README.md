@@ -144,16 +144,19 @@ The React app lists PDF, Markdown, and image files from `./docs`, lets you add f
 into that folder, archive files into `./docs_archive`, permanently delete archived
 files after typing `USUWAM`, select files with checkboxes, and send the selected text
 plus your question to the model. Enable the `Embed` checkbox before adding files to
-send each uploaded file to the configured local RAG ingest endpoint. The local RAG
-service extracts text, chunks it, embeds each chunk, and stores the persistent chunk
-text, vectors, and metadata in `./rag_data/rag.sqlite3`. Query embeddings are temporary
-during search/query calls, but document embeddings remain in SQLite until you delete or
+send each uploaded file to the configured local RAG ingest endpoint. The app extracts
+the upload text and sends the local RAG service the JSON ingest shape
+`{"text": "...", "source": "...", "collection": "default"}`. The local RAG service
+chunks it, embeds each chunk, and stores the persistent chunk text, vectors, and
+metadata in `./rag_data/rag.sqlite3`. Query embeddings are temporary during
+search/query calls, but document embeddings remain in SQLite until you delete or
 re-ingest them. In the `Pytanie` section, the
 `Znajdź kontekst w plikach` checkbox switches the same submit flow into source search:
 it extracts text from the selected PDFs, Markdown files, and images, ranks the best
 passages, asks the model over those passages, and shows the matched filenames with
 quote snippets. If no files are selected in source search mode, the app searches all
-active files in `./docs`.
+active files in `./docs`. The `Szukaj przez embeddingi` checkbox calls the local RAG
+query endpoint instead, so retrieval uses the persisted SQLite embeddings.
 
 Start both together:
 
@@ -191,6 +194,7 @@ GET  /api/docs/archive
 DELETE /api/docs/archive/{document_id}
 POST /api/docs/chat
 POST /api/docs/search
+POST /api/docs/embedding-search
 ```
 
 `/api/docs/chat` adds an instruction before the selected document text so the model
@@ -214,6 +218,21 @@ below. Send an empty or omitted `files` list to search all active docs:
       "quote": "Screenshot shows login failed because the session token expired."
     }
   ]
+}
+```
+
+`/api/docs/embedding-search` is the embedding/RAG path. It calls the configured
+`/local_rag/query` endpoint with:
+
+```json
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is in my documents?"
+    }
+  ],
+  "collection": "default"
 }
 ```
 
@@ -276,7 +295,9 @@ export REQUEST_TIMEOUT_SECONDS="120"
 export MAX_PDF_CHARS="120000"
 export IMAGE_CHAT_URL="http://0.0.0.0:11112/v1/chat/image"
 export IMAGE_CHAT_THINKING="false"
-export LOCAL_RAG_INGEST_URL="http://0.0.0.0:11112/v1/local_rag/ingest"
+export LOCAL_RAG_INGEST_URL=""
+export LOCAL_RAG_SEARCH_URL=""
+export LOCAL_RAG_QUERY_URL=""
 export RAG_DATABASE_PATH="rag_data/rag.sqlite3"
 export EMBEDDINGS_URL="http://0.0.0.0:11112/v1/embeddings"
 export EMBEDDINGS_MODEL="text-embedding-3-small"
@@ -291,6 +312,11 @@ export SOURCE_SEARCH_CHUNK_OVERLAP="160"
 export EMBEDDINGS_CHUNK_CHARS="1200"
 export EMBEDDINGS_CHUNK_OVERLAP="160"
 ```
+
+Leave the `LOCAL_RAG_*_URL` values empty to derive them from `CHAT_COMPLETIONS_URL`.
+For example, `CHAT_COMPLETIONS_URL=http://192.168.0.80:11112/v1/chat/completions`
+resolves ingest and query calls to `http://192.168.0.80:11112/local_rag/ingest` and
+`http://192.168.0.80:11112/local_rag/query`.
 
 `MAX_PDF_CHARS` prevents accidentally sending an extremely large prompt. Set it to `0`
 to disable truncation.

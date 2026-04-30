@@ -1,4 +1,6 @@
 import {
+  CircleCheck,
+  CircleX,
   CheckSquare,
   ChevronDown,
   ChevronRight,
@@ -7,6 +9,7 @@ import {
   Image as ImageIcon,
   Languages,
   Loader2,
+  Pencil,
   RefreshCw,
   Search,
   Send,
@@ -14,7 +17,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react'
-import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 type DocsFile = {
@@ -63,7 +66,7 @@ type SourceMatch = {
   score: number
 }
 
-type RequestMode = 'chat' | 'source_search'
+type RequestMode = 'chat' | 'source_search' | 'embedding_search'
 
 type DocsChatRequestMeta = {
   mode?: RequestMode
@@ -153,6 +156,12 @@ type Translations = {
   noArchivedFiles: string
   archiveFileTitle: string
   archiveFileAria: string
+  renameFileTitle: string
+  renameFileAria: string
+  saveRenameTitle: string
+  saveRenameAria: string
+  cancelRenameTitle: string
+  cancelRenameAria: string
   deleteArchivedTitle: string
   deleteArchivedAria: string
   deleteFileModalTitle: string
@@ -167,7 +176,9 @@ type Translations = {
   asking: string
   askAi: string
   findingSources: string
+  searchingEmbeddings: string
   findContextInFiles: string
+  searchWithEmbeddings: string
   answerHeading: string
   promptChars: (count: number) => string
   sourceHeading: string
@@ -202,10 +213,12 @@ type Translations = {
   deleteHistoryError: string
   clearHistoryError: string
   uploadFilesError: string
+  renameFilesError: string
   archiveFilesError: string
   loadArchiveError: string
   deleteArchivedError: string
   searchSourcesError: string
+  searchEmbeddingsError: string
   unexpectedError: string
 }
 
@@ -238,6 +251,12 @@ const TRANSLATIONS: Record<Language, Translations> = {
     noArchivedFiles: 'Archiwum jest puste',
     archiveFileTitle: 'Przenieś do archiwum',
     archiveFileAria: 'Przenieś plik do archiwum',
+    renameFileTitle: 'Zmień nazwę',
+    renameFileAria: 'Zmień nazwę pliku',
+    saveRenameTitle: 'Zapisz nazwę',
+    saveRenameAria: 'Zapisz nową nazwę pliku',
+    cancelRenameTitle: 'Anuluj zmianę nazwy',
+    cancelRenameAria: 'Anuluj zmianę nazwy pliku',
     deleteArchivedTitle: 'Usuń na zawsze',
     deleteArchivedAria: 'Usuń zarchiwizowany plik na zawsze',
     deleteFileModalTitle: 'Usuń plik na zawsze',
@@ -252,7 +271,9 @@ const TRANSLATIONS: Record<Language, Translations> = {
     asking: 'Pytam',
     askAi: 'Zapytaj AI',
     findingSources: 'Szukam',
+    searchingEmbeddings: 'Szukam embeddingami',
     findContextInFiles: 'Znajdź kontekst w plikach',
+    searchWithEmbeddings: 'Szukaj przez embeddingi',
     answerHeading: 'Odpowiedź',
     promptChars: (count) => `${count} znaków promptu`,
     sourceHeading: 'Źródła',
@@ -287,10 +308,12 @@ const TRANSLATIONS: Record<Language, Translations> = {
     deleteHistoryError: 'Nie udało się usunąć wpisu historii.',
     clearHistoryError: 'Nie udało się wyczyścić historii.',
     uploadFilesError: 'Nie udało się dodać plików.',
+    renameFilesError: 'Nie udało się zmienić nazwy pliku.',
     archiveFilesError: 'Nie udało się przenieść pliku do archiwum.',
     loadArchiveError: 'Nie udało się załadować archiwum.',
     deleteArchivedError: 'Nie udało się usunąć pliku z archiwum.',
     searchSourcesError: 'Nie udało się znaleźć źródeł.',
+    searchEmbeddingsError: 'Nie udało się wyszukać przez embeddingi.',
     unexpectedError: 'Wystąpił nieoczekiwany błąd.',
   },
   en: {
@@ -317,6 +340,12 @@ const TRANSLATIONS: Record<Language, Translations> = {
     noArchivedFiles: 'Archive is empty',
     archiveFileTitle: 'Move to archive',
     archiveFileAria: 'Move file to archive',
+    renameFileTitle: 'Rename',
+    renameFileAria: 'Rename file',
+    saveRenameTitle: 'Save name',
+    saveRenameAria: 'Save new file name',
+    cancelRenameTitle: 'Cancel rename',
+    cancelRenameAria: 'Cancel file rename',
     deleteArchivedTitle: 'Delete forever',
     deleteArchivedAria: 'Delete archived file forever',
     deleteFileModalTitle: 'Delete file forever',
@@ -331,7 +360,9 @@ const TRANSLATIONS: Record<Language, Translations> = {
     asking: 'Asking',
     askAi: 'Ask AI',
     findingSources: 'Searching',
+    searchingEmbeddings: 'Searching embeddings',
     findContextInFiles: 'Find context in files',
+    searchWithEmbeddings: 'Search with embeddings',
     answerHeading: 'Answer',
     promptChars: (count) => `${count} prompt chars`,
     sourceHeading: 'Sources',
@@ -366,10 +397,12 @@ const TRANSLATIONS: Record<Language, Translations> = {
     deleteHistoryError: 'Could not delete history item.',
     clearHistoryError: 'Could not clear history.',
     uploadFilesError: 'Could not add files.',
+    renameFilesError: 'Could not rename file.',
     archiveFilesError: 'Could not move file to archive.',
     loadArchiveError: 'Could not load archive.',
     deleteArchivedError: 'Could not delete archived file.',
     searchSourcesError: 'Could not find sources.',
+    searchEmbeddingsError: 'Could not search embeddings.',
     unexpectedError: 'Unexpected error.',
   },
 }
@@ -383,6 +416,7 @@ function App() {
   const [query, setQuery] = useState('')
   const [prompt, setPrompt] = useState('')
   const [findContextInFiles, setFindContextInFiles] = useState(false)
+  const [searchWithEmbeddings, setSearchWithEmbeddings] = useState(false)
   const [embedUploads, setEmbedUploads] = useState(false)
   const [answer, setAnswer] = useState('')
   const [responseMeta, setResponseMeta] = useState<DocsChatRequestMeta | null>(null)
@@ -395,6 +429,9 @@ function App() {
   const [activeRequestMode, setActiveRequestMode] = useState<RequestMode | null>(null)
   const [isUploading, setIsUploading] = useState(false)
   const [archivingId, setArchivingId] = useState<string | null>(null)
+  const [editingDocumentId, setEditingDocumentId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [renamingId, setRenamingId] = useState<string | null>(null)
   const [deleteCandidate, setDeleteCandidate] = useState<DocsFile | null>(null)
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [isDeletingArchived, setIsDeletingArchived] = useState(false)
@@ -658,6 +695,93 @@ function App() {
     }
   }
 
+  function startRenamingDocument(documentFile: DocsFile) {
+    setEditingDocumentId(documentFile.id)
+    setRenameValue(splitDocumentName(documentFile.name).stem)
+    setError('')
+  }
+
+  function cancelRenamingDocument() {
+    if (renamingId) {
+      return
+    }
+
+    setEditingDocumentId(null)
+    setRenameValue('')
+  }
+
+  function handleRenameKeyDown(event: KeyboardEvent<HTMLInputElement>, documentFile: DocsFile) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      void renameDocument(documentFile)
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      cancelRenamingDocument()
+    }
+  }
+
+  async function renameDocument(documentFile: DocsFile) {
+    const nextStem = renameValue.trim()
+    if (!nextStem || renamingId) {
+      return
+    }
+
+    const currentStem = splitDocumentName(documentFile.name).stem
+    if (nextStem === currentStem) {
+      cancelRenamingDocument()
+      return
+    }
+
+    setRenamingId(documentFile.id)
+    setError('')
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/docs/files/${encodeDocumentId(documentFile.id)}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ name: nextStem }),
+        },
+      )
+      const data = (await response.json()) as DocsFileActionResponse
+      if (!response.ok) {
+        throw new Error(readApiError(data.detail, t.renameFilesError))
+      }
+
+      if (data.file) {
+        setDocuments((currentDocuments) =>
+          currentDocuments.map((document) =>
+            document.id === documentFile.id ? (data.file as DocsFile) : document,
+          ),
+        )
+        setSelectedIds((currentSelection) => {
+          if (!currentSelection.has(documentFile.id)) {
+            return currentSelection
+          }
+
+          const nextSelection = new Set(currentSelection)
+          nextSelection.delete(documentFile.id)
+          nextSelection.add((data.file as DocsFile).id)
+          return nextSelection
+        })
+      } else {
+        await loadDocuments()
+      }
+
+      setEditingDocumentId(null)
+      setRenameValue('')
+    } catch (renameError) {
+      setError(errorMessage(renameError, t.unexpectedError))
+    } finally {
+      setRenamingId(null)
+    }
+  }
+
   function openDeleteArchivedModal(documentFile: DocsFile) {
     setDeleteCandidate(documentFile)
     setDeleteConfirmation('')
@@ -710,17 +834,22 @@ function App() {
 
   async function askModel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    await submitDocsQuestion(findContextInFiles ? 'source_search' : 'chat')
+    const mode: RequestMode = searchWithEmbeddings
+      ? 'embedding_search'
+      : findContextInFiles
+        ? 'source_search'
+        : 'chat'
+    await submitDocsQuestion(mode)
   }
 
   async function submitDocsQuestion(mode: RequestMode) {
     const selectedFiles = [...selectedIds]
     const files =
-      mode === 'source_search' && selectedFiles.length === 0
+      mode !== 'chat' && selectedFiles.length === 0
         ? documents.map((document) => document.id)
         : selectedFiles
 
-    if (!prompt.trim() || !files.length || isAsking) {
+    if (!prompt.trim() || (mode === 'chat' && !files.length) || isAsking) {
       return
     }
 
@@ -731,7 +860,12 @@ function App() {
     setIsAnswerExpanded(true)
 
     try {
-      const endpoint = mode === 'source_search' ? '/api/docs/search' : '/api/docs/chat'
+      const endpoint =
+        mode === 'embedding_search'
+          ? '/api/docs/embedding-search'
+          : mode === 'source_search'
+            ? '/api/docs/search'
+            : '/api/docs/chat'
       const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         method: 'POST',
         headers: {
@@ -744,8 +878,14 @@ function App() {
       })
       const data = (await response.json()) as DocsChatResponse
       if (!response.ok) {
+        const fallbackError =
+          mode === 'embedding_search'
+            ? t.searchEmbeddingsError
+            : mode === 'source_search'
+              ? t.searchSourcesError
+              : t.askError
         throw new Error(
-          readApiError(data.detail, mode === 'source_search' ? t.searchSourcesError : t.askError),
+          readApiError(data.detail, fallbackError),
         )
       }
 
@@ -784,6 +924,7 @@ function App() {
       setResponseMeta(data.request ?? null)
       setIsAnswerExpanded(true)
       setFindContextInFiles(data.request?.mode === 'source_search')
+      setSearchWithEmbeddings(data.request?.mode === 'embedding_search')
       setSelectedIds(new Set((data.request?.files ?? []).map((file) => file.id)))
     } catch (historyError) {
       setError(errorMessage(historyError, t.unexpectedError))
@@ -965,38 +1106,104 @@ function App() {
                   <StatusLine icon={<FileText size={18} />} text={t.noDocsFiles} />
                 ) : null}
 
-                {filteredDocuments.map((document) => (
-                  <article className="file-row" key={document.id} role="listitem">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(document.id)}
-                      onChange={() => toggleDocument(document.id)}
-                      aria-label={document.name}
-                    />
-                    <DocumentTypeIcon documentType={document.document_type} />
-                    <span className="file-copy">
-                      <strong>{document.name}</strong>
-                      <span>
-                        {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
-                        {formatBytes(document.size_bytes)}
-                      </span>
-                    </span>
-                    <button
-                      className="file-archive"
-                      type="button"
-                      onClick={() => void archiveDocument(document)}
-                      disabled={archivingId === document.id}
-                      title={t.archiveFileTitle}
-                      aria-label={`${t.archiveFileAria}: ${document.name}`}
-                    >
-                      {archivingId === document.id ? (
-                        <Loader2 className="spin" size={15} />
+                {filteredDocuments.map((document) => {
+                  const isEditing = editingDocumentId === document.id
+                  const { suffix } = splitDocumentName(document.name)
+                  const canSaveRename =
+                    Boolean(renameValue.trim()) &&
+                    renameValue.trim() !== splitDocumentName(document.name).stem &&
+                    renamingId !== document.id
+
+                  return (
+                    <article className="file-row" key={document.id} role="listitem">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(document.id)}
+                        onChange={() => toggleDocument(document.id)}
+                        disabled={isEditing || renamingId === document.id}
+                        aria-label={document.name}
+                      />
+                      <DocumentTypeIcon documentType={document.document_type} />
+                      {isEditing ? (
+                        <label className="rename-field">
+                          <input
+                            autoFocus
+                            value={renameValue}
+                            onChange={(event) => setRenameValue(event.target.value)}
+                            onKeyDown={(event) => handleRenameKeyDown(event, document)}
+                            aria-label={`${t.renameFileAria}: ${document.name}`}
+                          />
+                          <span>{suffix}</span>
+                        </label>
                       ) : (
-                        <Trash2 size={15} />
+                        <span className="file-copy">
+                          <strong>{document.name}</strong>
+                          <span>
+                            {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
+                            {formatBytes(document.size_bytes)}
+                          </span>
+                        </span>
                       )}
-                    </button>
-                  </article>
-                ))}
+                      <span className="file-actions">
+                        {isEditing ? (
+                          <>
+                            <button
+                              className="file-cancel"
+                              type="button"
+                              onClick={cancelRenamingDocument}
+                              disabled={renamingId === document.id}
+                              title={t.cancelRenameTitle}
+                              aria-label={`${t.cancelRenameAria}: ${document.name}`}
+                            >
+                              <CircleX size={16} />
+                            </button>
+                            <button
+                              className="file-confirm"
+                              type="button"
+                              onClick={() => void renameDocument(document)}
+                              disabled={!canSaveRename}
+                              title={t.saveRenameTitle}
+                              aria-label={`${t.saveRenameAria}: ${document.name}`}
+                            >
+                              {renamingId === document.id ? (
+                                <Loader2 className="spin" size={16} />
+                              ) : (
+                                <CircleCheck size={16} />
+                              )}
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              className="file-rename"
+                              type="button"
+                              onClick={() => startRenamingDocument(document)}
+                              disabled={renamingId === document.id || Boolean(editingDocumentId)}
+                              title={t.renameFileTitle}
+                              aria-label={`${t.renameFileAria}: ${document.name}`}
+                            >
+                              <Pencil size={15} />
+                            </button>
+                            <button
+                              className="file-archive"
+                              type="button"
+                              onClick={() => void archiveDocument(document)}
+                              disabled={archivingId === document.id || Boolean(editingDocumentId)}
+                              title={t.archiveFileTitle}
+                              aria-label={`${t.archiveFileAria}: ${document.name}`}
+                            >
+                              {archivingId === document.id ? (
+                                <Loader2 className="spin" size={15} />
+                              ) : (
+                                <Trash2 size={15} />
+                              )}
+                            </button>
+                          </>
+                        )}
+                      </span>
+                    </article>
+                  )
+                })}
               </div>
 
               <section className="archive-section" aria-labelledby="archive-heading">
@@ -1061,9 +1268,28 @@ function App() {
               <input
                 type="checkbox"
                 checked={findContextInFiles}
-                onChange={(event) => setFindContextInFiles(event.target.checked)}
+                onChange={(event) => {
+                  setFindContextInFiles(event.target.checked)
+                  if (event.target.checked) {
+                    setSearchWithEmbeddings(false)
+                  }
+                }}
               />
               <span>{t.findContextInFiles}</span>
+            </label>
+
+            <label className="context-option">
+              <input
+                type="checkbox"
+                checked={searchWithEmbeddings}
+                onChange={(event) => {
+                  setSearchWithEmbeddings(event.target.checked)
+                  if (event.target.checked) {
+                    setFindContextInFiles(false)
+                  }
+                }}
+              />
+              <span>{t.searchWithEmbeddings}</span>
             </label>
 
             <div className="actions">
@@ -1072,7 +1298,7 @@ function App() {
                 type="submit"
                 disabled={
                   !prompt.trim() ||
-                  (!findContextInFiles && selectedIds.size === 0) ||
+                  (!findContextInFiles && !searchWithEmbeddings && selectedIds.size === 0) ||
                   (findContextInFiles && documents.length === 0) ||
                   isAsking
                 }
@@ -1084,9 +1310,11 @@ function App() {
                 )}
                 {activeRequestMode === 'source_search'
                   ? t.findingSources
-                  : activeRequestMode === 'chat'
-                    ? t.asking
-                    : t.askAi}
+                  : activeRequestMode === 'embedding_search'
+                    ? t.searchingEmbeddings
+                    : activeRequestMode === 'chat'
+                      ? t.asking
+                      : t.askAi}
               </button>
             </div>
           </form>
@@ -1350,6 +1578,18 @@ function formatBytes(bytes: number) {
   }
 
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`
+}
+
+function splitDocumentName(name: string) {
+  const extensionStart = name.lastIndexOf('.')
+  if (extensionStart <= 0) {
+    return { stem: name, suffix: '' }
+  }
+
+  return {
+    stem: name.slice(0, extensionStart),
+    suffix: name.slice(extensionStart),
+  }
 }
 
 function normalizeAnswer(data: DocsChatResponse) {

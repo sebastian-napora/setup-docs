@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,8 @@ from pdf_chat_service.docs_library import (
     delete_archived_library_document,
     extract_library_document,
     list_library_documents,
+    rename_library_document,
+    resolve_library_document,
     save_library_upload,
     search_extracted_documents,
     validate_library_upload,
@@ -29,6 +32,7 @@ from pdf_chat_service.embeddings import (
     EmbeddingError,
     LibraryDocumentEmbeddingResult,
     create_library_document_embeddings,
+    post_local_rag_query,
 )
 from pdf_chat_service.history import (
     ChatHistoryError,
@@ -66,7 +70,18 @@ class DeleteArchivedDocumentRequest(BaseModel):
     confirmation: str = Field(..., min_length=1)
 
 
+class RenameDocumentRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+
+
 class DocsSourceSearchRequest(BaseModel):
+    files: list[str] = Field(default_factory=list)
+    prompt: str = Field(..., min_length=1)
+    stream: bool = False
+    model: str | None = None
+
+
+class DocsEmbeddingSearchRequest(BaseModel):
     files: list[str] = Field(default_factory=list)
     prompt: str = Field(..., min_length=1)
     stream: bool = False
@@ -128,8 +143,12 @@ async def upload_docs_files(
                     await create_library_document_embeddings(
                         docs_dir=settings.docs_dir,
                         document_id=document.id,
-                        local_rag_ingest_url=settings.local_rag_ingest_url,
+                        local_rag_ingest_url=settings.resolved_local_rag_ingest_url(),
                         rag_database_path=settings.rag_database_path,
+                        max_chars=settings.max_pdf_chars,
+                        image_chat_url=settings.image_chat_url,
+                        image_chat_prompt=settings.image_chat_prompt,
+                        image_chat_thinking=settings.image_chat_thinking,
                         timeout_seconds=settings.request_timeout_seconds,
                     )
                 )
@@ -137,9 +156,14 @@ async def upload_docs_files(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except httpx.HTTPStatusError as exc:
             raise HTTPException(
-                status_code=exc.response.status_code,
+                status_code=502,
                 detail={
-                    "message": "Embeddings endpoint returned an error.",
+                    "message": (
+                        "Local RAG ingest endpoint returned an error. "
+                        "Check LOCAL_RAG_INGEST_URL and make sure the embeddings service exposes /local_rag/ingest."
+                    ),
+                    "url": str(exc.request.url),
+                    "status_code": exc.response.status_code,
                     "response": exc.response.text,
                 },
             ) from exc
@@ -176,6 +200,20 @@ async def archive_docs_file(document_id: str) -> dict[str, Any]:
             docs_dir=settings.docs_dir,
             archive_dir=settings.docs_archive_dir,
             document_id=document_id,
+        )
+    except DocumentLibraryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"file": library_document_payload(document)}
+
+
+@app.patch("/api/docs/files/{document_id:path}")
+async def rename_docs_file(document_id: str, request: RenameDocumentRequest) -> dict[str, Any]:
+    try:
+        document = rename_library_document(
+            docs_dir=settings.docs_dir,
+            document_id=document_id,
+            new_stem=request.name,
         )
     except DocumentLibraryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -395,6 +433,97 @@ async def search_docs_sources(request: DocsSourceSearchRequest) -> dict[str, Any
     }
 
 
+@app.post("/api/docs/embedding-search")
+async def search_docs_embeddings(request: DocsEmbeddingSearchRequest) -> dict[str, Any]:
+    document_ids = unique_document_ids(request.files)
+
+    try:
+        selected_documents = (
+            [resolve_lightweight_library_document(document_id) for document_id in document_ids]
+            if document_ids
+            else []
+        )
+        rag_response = await post_local_rag_query(
+            query_url=settings.resolved_local_rag_query_url(),
+            prompt=request.prompt,
+            timeout_seconds=settings.request_timeout_seconds,
+        )
+    except (DocumentLibraryError, EmbeddingError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": (
+                    "Local RAG query endpoint returned an error. "
+                    "Check LOCAL_RAG_QUERY_URL and make sure the embeddings service exposes /local_rag/query."
+                ),
+                "url": str(exc.request.url),
+                "status_code": exc.response.status_code,
+                "response": exc.response.text,
+            },
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not reach local RAG query endpoint: {exc}",
+        ) from exc
+
+    answer = extract_rag_answer(rag_response)
+    completion = {
+        "choices": [
+            {
+                "message": {
+                    "content": answer,
+                }
+            }
+        ],
+        "rag_response": rag_response,
+    }
+    response_path = save_completion_choices_markdown(
+        completion=completion,
+        input_filename="docs-embedding-search",
+        response_dir=settings.response_dir,
+    )
+    sources = rag_sources_payload(rag_response)
+    request_info = {
+        "mode": "embedding_search",
+        "model": request.model or settings.chat_model,
+        "stream": request.stream,
+        "content_chars": len(request.prompt),
+        "document_chars": 0,
+        "source_count": len(sources),
+        "sources": sources,
+        "files": [
+            {
+                "id": document.id,
+                "name": document.name,
+                "document_type": document.document_type,
+                "chars": 0,
+            }
+            for document in selected_documents
+        ],
+        "rag_query_url": settings.resolved_local_rag_query_url(),
+    }
+    history_record = save_docs_chat_history(
+        response_dir=settings.response_dir,
+        prompt=request.prompt,
+        answer=answer,
+        request_info=request_info,
+        saved_response=str(response_path),
+    )
+
+    return {
+        "request": request_info,
+        "answer": answer,
+        "sources": sources,
+        "history_item": history_record,
+        "saved_response": str(response_path),
+        "completion": completion,
+        "rag_response": rag_response,
+    }
+
+
 @app.post("/file/chat")
 @app.post("/pdf/chat")
 async def chat_with_document(
@@ -521,6 +650,91 @@ def source_search_match_payload(match: SourceSearchMatch) -> dict[str, Any]:
         "quote": match.quote,
         "score": match.score,
     }
+
+
+def resolve_lightweight_library_document(document_id: str) -> LibraryDocument:
+    return resolve_library_document(docs_dir=settings.docs_dir, document_id=document_id)
+
+
+def extract_rag_answer(rag_response: dict[str, Any]) -> str:
+    for key in ("answer", "response", "output", "text"):
+        value = rag_response.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    choices_answer = render_choices_markdown(rag_response).strip()
+    if choices_answer:
+        return choices_answer
+
+    message = rag_response.get("message")
+    if isinstance(message, dict) and isinstance(message.get("content"), str):
+        return message["content"].strip()
+
+    return json.dumps(rag_response, ensure_ascii=False, indent=2)
+
+
+def rag_sources_payload(rag_response: dict[str, Any]) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    for item in iter_rag_source_items(rag_response):
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        quote = first_string(item, metadata, ("quote", "text", "content", "chunk", "passage", "snippet"))
+        if not quote:
+            continue
+        file_id = first_string(
+            item,
+            metadata,
+            ("file_id", "document_id", "source", "filename", "name", "path"),
+        )
+        name = first_string(item, metadata, ("name", "filename", "source", "file_id")) or file_id
+        sources.append(
+            {
+                "file_id": file_id or name or "embedded-source",
+                "name": name or file_id or "Embedded source",
+                "document_type": first_string(item, metadata, ("document_type", "type")) or "embedding",
+                "quote": quote,
+                "score": numeric_score(item),
+            }
+        )
+    return sources
+
+
+def iter_rag_source_items(rag_response: dict[str, Any]) -> list[Any]:
+    for key in ("sources", "matches", "results", "chunks", "context"):
+        value = rag_response.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            nested = iter_rag_source_items(value)
+            if nested:
+                return nested
+
+    data = rag_response.get("data")
+    if isinstance(data, dict):
+        return iter_rag_source_items(data)
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def first_string(primary: dict[str, Any], metadata: dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = primary.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def numeric_score(item: dict[str, Any]) -> float:
+    for key in ("score", "similarity", "distance"):
+        value = item.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return 0.0
 
 
 def embedding_result_payload(result: LibraryDocumentEmbeddingResult) -> dict[str, Any]:
