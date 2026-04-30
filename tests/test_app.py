@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from pdf_chat_service import app as app_module
+from pdf_chat_service.embeddings import LibraryDocumentEmbeddingResult
 
 
 def test_upload_docs_files_stores_multiple_supported_files(
@@ -55,6 +56,52 @@ def test_upload_docs_files_rejects_unsupported_file(
     assert response.status_code == 400
     assert "PDF, Markdown, and image" in response.json()["detail"]
     assert not (tmp_path / "docs").exists()
+
+
+def test_upload_docs_files_embeds_when_requested(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    docs_dir = tmp_path / "docs"
+    rag_database_path = tmp_path / "rag_data" / "rag.sqlite3"
+    monkeypatch.setattr(app_module.settings, "docs_dir", docs_dir)
+    monkeypatch.setattr(app_module.settings, "rag_database_path", rag_database_path)
+    embedded_document_ids: list[str] = []
+
+    async def fake_create_library_document_embeddings(**kwargs):
+        embedded_document_ids.append(kwargs["document_id"])
+        return LibraryDocumentEmbeddingResult(
+            file_id=kwargs["document_id"],
+            name=kwargs["document_id"],
+            document_type="markdown",
+            database_path=kwargs["rag_database_path"],
+            ingest_response={"ingested": 1},
+        )
+
+    monkeypatch.setattr(
+        app_module,
+        "create_library_document_embeddings",
+        fake_create_library_document_embeddings,
+    )
+    client = TestClient(app_module.app)
+
+    response = client.post(
+        "/api/docs/files",
+        data={"embed": "true"},
+        files=[("files", ("notes.md", b"# Notes", "text/markdown"))],
+    )
+
+    assert response.status_code == 200
+    assert embedded_document_ids == ["notes.md"]
+    assert response.json()["embeddings"] == [
+        {
+            "file_id": "notes.md",
+            "name": "notes.md",
+            "document_type": "markdown",
+            "database_path": str(rag_database_path),
+            "ingest_response": {"ingested": 1},
+        }
+    ]
 
 
 def test_archive_docs_file_moves_file_to_archive(

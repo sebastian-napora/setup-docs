@@ -91,11 +91,19 @@
 }
 
 .section-header {
-  display: flex;
+  display: grid;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 14px;
+}
+
+.section-title {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
 }
 
 .section-header h2 {
@@ -107,11 +115,32 @@
   margin-bottom: 10px;
 }
 
+.collapse-toggle {
+  width: 34px;
+  min-height: 34px;
+  flex: 0 0 auto;
+  border-color: transparent;
+  background: transparent;
+  color: #475569;
+  padding: 0;
+}
+
+.collapse-toggle:hover:not(:disabled) {
+  border-color: #cbd3dd;
+  background: #f8fafc;
+  color: #111827;
+}
+
+.file-column.is-collapsed .section-header,
+.answer-panel.is-collapsed .section-header,
+.history-column.is-collapsed .section-header {
+  margin-bottom: 0;
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  justify-content: flex-end;
 }
 
 .history-actions {
@@ -125,6 +154,22 @@
   min-height: 34px;
   padding: 0 10px;
   font-size: 13px;
+}
+
+.embed-option {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  color: #145544;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.embed-option input {
+  width: 17px;
+  height: 17px;
+  accent-color: #28715f;
 }
 
 .upload-input {
@@ -477,6 +522,10 @@ textarea:focus,
   min-height: 238px;
 }
 
+.answer-panel.is-collapsed {
+  min-height: 0;
+}
+
 .answer-content {
   display: grid;
   gap: 16px;
@@ -554,7 +603,7 @@ textarea:focus,
   color: #2864b4;
 }
 
-.source-card-header > span {
+.source-card-header>span {
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -700,6 +749,11 @@ textarea:focus,
   .button-row button {
     flex: 1 1 120px;
   }
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
 }
 
 @media (max-width: 1180px) and (min-width: 841px) {

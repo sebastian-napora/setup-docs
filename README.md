@@ -143,7 +143,12 @@ in `./response`. The API response includes the generated path:
 The React app lists PDF, Markdown, and image files from `./docs`, lets you add files
 into that folder, archive files into `./docs_archive`, permanently delete archived
 files after typing `USUWAM`, select files with checkboxes, and send the selected text
-plus your question to the model. In the `Pytanie` section, the
+plus your question to the model. Enable the `Embed` checkbox before adding files to
+send each uploaded file to the configured local RAG ingest endpoint. The local RAG
+service extracts text, chunks it, embeds each chunk, and stores the persistent chunk
+text, vectors, and metadata in `./rag_data/rag.sqlite3`. Query embeddings are temporary
+during search/query calls, but document embeddings remain in SQLite until you delete or
+re-ingest them. In the `Pytanie` section, the
 `Znajdź kontekst w plikach` checkbox switches the same submit flow into source search:
 it extracts text from the selected PDFs, Markdown files, and images, ranks the best
 passages, asks the model over those passages, and shows the matched filenames with
@@ -271,13 +276,20 @@ export REQUEST_TIMEOUT_SECONDS="120"
 export MAX_PDF_CHARS="120000"
 export IMAGE_CHAT_URL="http://0.0.0.0:11112/v1/chat/image"
 export IMAGE_CHAT_THINKING="false"
+export LOCAL_RAG_INGEST_URL="http://0.0.0.0:11112/v1/local_rag/ingest"
+export RAG_DATABASE_PATH="rag_data/rag.sqlite3"
+export EMBEDDINGS_URL="http://0.0.0.0:11112/v1/embeddings"
+export EMBEDDINGS_MODEL="text-embedding-3-small"
 export COMPRESS_URL="http://0.0.0.0:11112/compress"
 export DOCS_DIR="docs"
 export DOCS_ARCHIVE_DIR="docs_archive"
+export EMBEDDINGS_DIR="embeddings"
 export RESPONSE_DIR="response"
 export SOURCE_SEARCH_MAX_MATCHES="8"
 export SOURCE_SEARCH_CHUNK_CHARS="1200"
 export SOURCE_SEARCH_CHUNK_OVERLAP="160"
+export EMBEDDINGS_CHUNK_CHARS="1200"
+export EMBEDDINGS_CHUNK_OVERLAP="160"
 ```
 
 `MAX_PDF_CHARS` prevents accidentally sending an extremely large prompt. Set it to `0`

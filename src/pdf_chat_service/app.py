@@ -25,6 +25,11 @@ from pdf_chat_service.docs_library import (
     search_extracted_documents,
     validate_library_upload,
 )
+from pdf_chat_service.embeddings import (
+    EmbeddingError,
+    LibraryDocumentEmbeddingResult,
+    create_library_document_embeddings,
+)
 from pdf_chat_service.history import (
     ChatHistoryError,
     clear_docs_chat_history,
@@ -87,7 +92,10 @@ async def list_docs_files() -> dict[str, Any]:
 
 
 @app.post("/api/docs/files")
-async def upload_docs_files(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+async def upload_docs_files(
+    files: list[UploadFile] = File(...),
+    embed: bool = Form(False),
+) -> dict[str, Any]:
     pending_uploads: list[tuple[str | None, bytes]] = []
     for file in files:
         file_bytes = await file.read()
@@ -112,9 +120,39 @@ async def upload_docs_files(files: list[UploadFile] = File(...)) -> dict[str, An
     except DocumentLibraryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    embeddings: list[LibraryDocumentEmbeddingResult] = []
+    if embed:
+        try:
+            for document in documents:
+                embeddings.append(
+                    await create_library_document_embeddings(
+                        docs_dir=settings.docs_dir,
+                        document_id=document.id,
+                        local_rag_ingest_url=settings.local_rag_ingest_url,
+                        rag_database_path=settings.rag_database_path,
+                        timeout_seconds=settings.request_timeout_seconds,
+                    )
+                )
+        except (DocumentExtractionError, DocumentLibraryError, EmbeddingError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(
+                status_code=exc.response.status_code,
+                detail={
+                    "message": "Embeddings endpoint returned an error.",
+                    "response": exc.response.text,
+                },
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not reach local RAG ingest endpoint: {exc}",
+            ) from exc
+
     return {
         "docs_dir": str(settings.docs_dir),
         "files": [library_document_payload(document) for document in documents],
+        "embeddings": [embedding_result_payload(result) for result in embeddings],
     }
 
 
@@ -482,6 +520,16 @@ def source_search_match_payload(match: SourceSearchMatch) -> dict[str, Any]:
         "document_type": match.document_type,
         "quote": match.quote,
         "score": match.score,
+    }
+
+
+def embedding_result_payload(result: LibraryDocumentEmbeddingResult) -> dict[str, Any]:
+    return {
+        "file_id": result.file_id,
+        "name": result.name,
+        "document_type": result.document_type,
+        "database_path": str(result.database_path),
+        "ingest_response": result.ingest_response,
     }
 
 

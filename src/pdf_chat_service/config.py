@@ -13,12 +13,19 @@ class Settings(BaseSettings):
     image_chat_url: str = DEFAULT_IMAGE_CHAT_URL
     image_chat_prompt: str = DEFAULT_IMAGE_CHAT_PROMPT
     image_chat_thinking: bool = False
+    local_rag_ingest_url: str = "http://0.0.0.0:11112/v1/local_rag/ingest"
+    rag_database_path: Path = Path("rag_data/rag.sqlite3")
+    embeddings_url: str = "http://0.0.0.0:11112/v1/embeddings"
+    embeddings_model: str = "text-embedding-3-small"
     compress_url: str = "http://0.0.0.0:11112/compress"
     docs_dir: Path = Path("docs")
     docs_archive_dir: Path = Path("docs_archive")
+    embeddings_dir: Path = Path("embeddings")
     response_dir: Path = Path("response")
     source_search_max_matches: int = 8
     source_search_chunk_chars: int = 1_200
     source_search_chunk_overlap: int = 160
+    embeddings_chunk_chars: int = 1_200
+    embeddings_chunk_overlap: int = 160
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

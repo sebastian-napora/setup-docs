@@ -1,5 +1,7 @@
 import {
   CheckSquare,
+  ChevronDown,
+  ChevronRight,
   FileText,
   History as HistoryIcon,
   Image as ImageIcon,
@@ -29,7 +31,16 @@ type DocsFilesResponse = {
 
 type DocsUploadResponse = {
   files?: DocsFile[]
+  embeddings?: DocsUploadEmbedding[]
   detail?: ApiDetail
+}
+
+type DocsUploadEmbedding = {
+  file_id: string
+  name: string
+  document_type: string
+  database_path: string
+  ingest_response?: unknown
 }
 
 type DocsFileActionResponse = {
@@ -123,12 +134,16 @@ type Translations = {
   appTitle: string
   refreshAllTitle: string
   refreshAllAria: string
+  collapseSection: (section: string) => string
+  expandSection: (section: string) => string
   filesHeading: string
   selected: (count: number) => string
   selectAll: string
   clear: string
   addFiles: string
   uploadingFiles: string
+  embeddingFiles: string
+  embedFiles: string
   searchFiles: string
   loadingFiles: string
   noDocsFiles: string
@@ -204,12 +219,16 @@ const TRANSLATIONS: Record<Language, Translations> = {
     appTitle: 'Chat z dokumentami',
     refreshAllTitle: 'Odśwież pliki i historię',
     refreshAllAria: 'Odśwież pliki i historię',
+    collapseSection: (section) => `Zwiń: ${section}`,
+    expandSection: (section) => `Rozwiń: ${section}`,
     filesHeading: 'Pliki',
     selected: (count) => `${count} wybrano`,
     selectAll: 'Wszystkie',
     clear: 'Wyczyść',
     addFiles: 'Dodaj',
     uploadingFiles: 'Dodaję',
+    embeddingFiles: 'Embeduję',
+    embedFiles: 'Embed',
     searchFiles: 'Szukaj plików',
     loadingFiles: 'Ładowanie plików',
     noDocsFiles: 'Brak plików PDF, Markdown lub obrazów',
@@ -279,12 +298,16 @@ const TRANSLATIONS: Record<Language, Translations> = {
     appTitle: 'Docs chat',
     refreshAllTitle: 'Refresh files and history',
     refreshAllAria: 'Refresh files and history',
+    collapseSection: (section) => `Collapse: ${section}`,
+    expandSection: (section) => `Expand: ${section}`,
     filesHeading: 'Files',
     selected: (count) => `${count} selected`,
     selectAll: 'All',
     clear: 'Clear',
     addFiles: 'Add',
     uploadingFiles: 'Adding',
+    embeddingFiles: 'Embedding',
+    embedFiles: 'Embed',
     searchFiles: 'Search files',
     loadingFiles: 'Loading files',
     noDocsFiles: 'No PDF, Markdown, or image files',
@@ -360,6 +383,7 @@ function App() {
   const [query, setQuery] = useState('')
   const [prompt, setPrompt] = useState('')
   const [findContextInFiles, setFindContextInFiles] = useState(false)
+  const [embedUploads, setEmbedUploads] = useState(false)
   const [answer, setAnswer] = useState('')
   const [responseMeta, setResponseMeta] = useState<DocsChatRequestMeta | null>(null)
   const [historyItems, setHistoryItems] = useState<DocsHistoryItem[]>([])
@@ -374,6 +398,9 @@ function App() {
   const [deleteCandidate, setDeleteCandidate] = useState<DocsFile | null>(null)
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [isDeletingArchived, setIsDeletingArchived] = useState(false)
+  const [isFilesExpanded, setIsFilesExpanded] = useState(true)
+  const [isAnswerExpanded, setIsAnswerExpanded] = useState(true)
+  const [isHistoryExpanded, setIsHistoryExpanded] = useState(true)
   const t = TRANSLATIONS[language]
   const isAsking = activeRequestMode !== null
 
@@ -561,6 +588,7 @@ function App() {
     try {
       const formData = new FormData()
       files.forEach((file) => formData.append('files', file))
+      formData.append('embed', embedUploads ? 'true' : 'false')
 
       const response = await fetch(`${API_BASE_URL}/api/docs/files`, {
         method: 'POST',
@@ -700,6 +728,7 @@ function App() {
     setError('')
     setAnswer('')
     setResponseMeta(null)
+    setIsAnswerExpanded(true)
 
     try {
       const endpoint = mode === 'source_search' ? '/api/docs/search' : '/api/docs/chat'
@@ -722,6 +751,7 @@ function App() {
 
       setAnswer(normalizeAnswer(data))
       setResponseMeta(mergeResponseSources(data))
+      setIsAnswerExpanded(true)
       if (data.history_item) {
         setActiveHistoryId(data.history_item.id)
         setHistoryItems((currentItems) => [
@@ -752,6 +782,7 @@ function App() {
       setPrompt(data.prompt ?? '')
       setAnswer(removeAnswerTags(data.answer ?? '').trim())
       setResponseMeta(data.request ?? null)
+      setIsAnswerExpanded(true)
       setFindContextInFiles(data.request?.mode === 'source_search')
       setSelectedIds(new Set((data.request?.files ?? []).map((file) => file.id)))
     } catch (historyError) {
@@ -846,132 +877,168 @@ function App() {
       </header>
 
       <main className="workspace">
-        <section className="file-column" aria-labelledby="files-heading">
+        <section
+          className={`file-column${isFilesExpanded ? '' : ' is-collapsed'}`}
+          aria-labelledby="files-heading"
+        >
           <div className="section-header">
-            <div>
-              <h2 id="files-heading">{t.filesHeading}</h2>
-              <p>{t.selected(selectedIds.size)}</p>
-            </div>
-            <div className="button-row">
-              <input
-                ref={uploadInputRef}
-                className="upload-input"
-                type="file"
-                multiple
-                accept={DOCUMENT_UPLOAD_ACCEPT}
-                onChange={(event) => void uploadDocuments(event.target.files)}
-              />
+            <div className="section-title">
               <button
-                className="upload-button"
+                className="collapse-toggle"
                 type="button"
-                onClick={() => uploadInputRef.current?.click()}
-                disabled={isUploading}
+                onClick={() => setIsFilesExpanded((isExpanded) => !isExpanded)}
+                aria-expanded={isFilesExpanded}
+                aria-controls="files-content"
+                title={isFilesExpanded ? t.collapseSection(t.filesHeading) : t.expandSection(t.filesHeading)}
+                aria-label={isFilesExpanded ? t.collapseSection(t.filesHeading) : t.expandSection(t.filesHeading)}
               >
-                {isUploading ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-                {isUploading ? t.uploadingFiles : t.addFiles}
+                {isFilesExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
               </button>
-              <button type="button" onClick={selectAllVisible} disabled={!filteredDocuments.length}>
-                <CheckSquare size={16} />
-                {t.selectAll}
-              </button>
-              <button type="button" onClick={clearSelection} disabled={!selectedIds.size}>
-                <Square size={16} />
-                {t.clear}
-              </button>
+              <div>
+                <h2 id="files-heading">{t.filesHeading}</h2>
+                {isFilesExpanded ? <p>{t.selected(selectedIds.size)}</p> : null}
+              </div>
             </div>
-          </div>
+            {isFilesExpanded ? (
+              <div className="button-row">
+                <div className="buttons">
+                  <input
+                    ref={uploadInputRef}
+                    className="upload-input"
+                    type="file"
+                    multiple
+                    accept={DOCUMENT_UPLOAD_ACCEPT}
+                    onChange={(event) => void uploadDocuments(event.target.files)}
+                  />
+                    <button
+                      className="upload-button"
+                      type="button"
+                      onClick={() => uploadInputRef.current?.click()}
+                      disabled={isUploading}
+                    >
+                      {isUploading ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+                      {isUploading ? (embedUploads ? t.embeddingFiles : t.uploadingFiles) : t.addFiles}
+                    </button>
+                  <label className="embed-option">
+                    <input
+                      type="checkbox"
+                      checked={embedUploads}
+                      onChange={(event) => setEmbedUploads(event.target.checked)}
+                      disabled={isUploading}
+                    />
+                    <span>{t.embedFiles}</span>
+                  </label>
+                </div>
 
-          <label className="search-field">
-            <Search size={18} />
-            <input
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t.searchFiles}
-            />
-          </label>
-
-          <div className="file-list" role="list">
-            {isLoadingDocs ? (
-              <StatusLine icon={<Loader2 className="spin" size={18} />} text={t.loadingFiles} />
-            ) : null}
-
-            {!isLoadingDocs && !filteredDocuments.length ? (
-              <StatusLine icon={<FileText size={18} />} text={t.noDocsFiles} />
-            ) : null}
-
-            {filteredDocuments.map((document) => (
-              <article className="file-row" key={document.id} role="listitem">
-                <input
-                  type="checkbox"
-                  checked={selectedIds.has(document.id)}
-                  onChange={() => toggleDocument(document.id)}
-                  aria-label={document.name}
-                />
-                <DocumentTypeIcon documentType={document.document_type} />
-                <span className="file-copy">
-                  <strong>{document.name}</strong>
-                  <span>
-                    {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
-                    {formatBytes(document.size_bytes)}
-                  </span>
-                </span>
-                <button
-                  className="file-archive"
-                  type="button"
-                  onClick={() => void archiveDocument(document)}
-                  disabled={archivingId === document.id}
-                  title={t.archiveFileTitle}
-                  aria-label={`${t.archiveFileAria}: ${document.name}`}
-                >
-                  {archivingId === document.id ? (
-                    <Loader2 className="spin" size={15} />
-                  ) : (
-                    <Trash2 size={15} />
-                  )}
-                </button>
-              </article>
-            ))}
-          </div>
-
-          <section className="archive-section" aria-labelledby="archive-heading">
-            <div className="archive-header">
-              <h3 id="archive-heading">{t.archiveHeading}</h3>
-              <span>{t.archived(archivedDocuments.length)}</span>
-            </div>
-
-            <div className="archive-list" role="list">
-              {isLoadingArchive ? (
-                <StatusLine icon={<Loader2 className="spin" size={18} />} text={t.loadingArchive} />
-              ) : null}
-
-              {!isLoadingArchive && !archivedDocuments.length ? (
-                <StatusLine icon={<Trash2 size={18} />} text={t.noArchivedFiles} />
-              ) : null}
-
-              {archivedDocuments.map((document) => (
-                <article className="archive-row" key={document.id} role="listitem">
-                  <DocumentTypeIcon documentType={document.document_type} />
-                  <span className="file-copy">
-                    <strong>{document.name}</strong>
-                    <span>
-                      {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
-                      {formatBytes(document.size_bytes)}
-                    </span>
-                  </span>
-                  <button
-                    className="file-delete"
-                    type="button"
-                    onClick={() => openDeleteArchivedModal(document)}
-                    title={t.deleteArchivedTitle}
-                    aria-label={`${t.deleteArchivedAria}: ${document.name}`}
-                  >
-                    <Trash2 size={15} />
+               <div className="buttons">
+                  <button type="button" onClick={selectAllVisible} disabled={!filteredDocuments.length}>
+                    <CheckSquare size={16} />
+                    {t.selectAll}
                   </button>
-                </article>
-              ))}
+                  <button type="button" onClick={clearSelection} disabled={!selectedIds.size}>
+                    <Square size={16} />
+                    {t.clear}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          {isFilesExpanded ? (
+            <div id="files-content">
+              <label className="search-field">
+                <Search size={18} />
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={t.searchFiles}
+                />
+              </label>
+
+              <div className="file-list" role="list">
+                {isLoadingDocs ? (
+                  <StatusLine icon={<Loader2 className="spin" size={18} />} text={t.loadingFiles} />
+                ) : null}
+
+                {!isLoadingDocs && !filteredDocuments.length ? (
+                  <StatusLine icon={<FileText size={18} />} text={t.noDocsFiles} />
+                ) : null}
+
+                {filteredDocuments.map((document) => (
+                  <article className="file-row" key={document.id} role="listitem">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(document.id)}
+                      onChange={() => toggleDocument(document.id)}
+                      aria-label={document.name}
+                    />
+                    <DocumentTypeIcon documentType={document.document_type} />
+                    <span className="file-copy">
+                      <strong>{document.name}</strong>
+                      <span>
+                        {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
+                        {formatBytes(document.size_bytes)}
+                      </span>
+                    </span>
+                    <button
+                      className="file-archive"
+                      type="button"
+                      onClick={() => void archiveDocument(document)}
+                      disabled={archivingId === document.id}
+                      title={t.archiveFileTitle}
+                      aria-label={`${t.archiveFileAria}: ${document.name}`}
+                    >
+                      {archivingId === document.id ? (
+                        <Loader2 className="spin" size={15} />
+                      ) : (
+                        <Trash2 size={15} />
+                      )}
+                    </button>
+                  </article>
+                ))}
+              </div>
+
+              <section className="archive-section" aria-labelledby="archive-heading">
+                <div className="archive-header">
+                  <h3 id="archive-heading">{t.archiveHeading}</h3>
+                  <span>{t.archived(archivedDocuments.length)}</span>
+                </div>
+
+                <div className="archive-list" role="list">
+                  {isLoadingArchive ? (
+                    <StatusLine icon={<Loader2 className="spin" size={18} />} text={t.loadingArchive} />
+                  ) : null}
+
+                  {!isLoadingArchive && !archivedDocuments.length ? (
+                    <StatusLine icon={<Trash2 size={18} />} text={t.noArchivedFiles} />
+                  ) : null}
+
+                  {archivedDocuments.map((document) => (
+                    <article className="archive-row" key={document.id} role="listitem">
+                      <DocumentTypeIcon documentType={document.document_type} />
+                      <span className="file-copy">
+                        <strong>{document.name}</strong>
+                        <span>
+                          {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
+                          {formatBytes(document.size_bytes)}
+                        </span>
+                      </span>
+                      <button
+                        className="file-delete"
+                        type="button"
+                        onClick={() => openDeleteArchivedModal(document)}
+                        title={t.deleteArchivedTitle}
+                        aria-label={`${t.deleteArchivedAria}: ${document.name}`}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </section>
             </div>
-          </section>
+          ) : null}
         </section>
 
         <section className="chat-column" aria-labelledby="question-heading">
@@ -1026,124 +1093,167 @@ function App() {
 
           {error ? <div className="error-banner">{error}</div> : null}
 
-          <section className="answer-panel" aria-live="polite" aria-label={t.answerHeading}>
+          <section
+            className={`answer-panel${isAnswerExpanded ? '' : ' is-collapsed'}`}
+            aria-live="polite"
+            aria-label={t.answerHeading}
+          >
             <div className="section-header compact">
-              <div>
-                <h2>{t.answerHeading}</h2>
-                <p>{responseMeta ? t.promptChars(responseMeta.content_chars) : t.ready}</p>
+              <div className="section-title">
+                <button
+                  className="collapse-toggle"
+                  type="button"
+                  onClick={() => setIsAnswerExpanded((isExpanded) => !isExpanded)}
+                  aria-expanded={isAnswerExpanded}
+                  aria-controls="answer-content"
+                  title={isAnswerExpanded ? t.collapseSection(t.answerHeading) : t.expandSection(t.answerHeading)}
+                  aria-label={isAnswerExpanded ? t.collapseSection(t.answerHeading) : t.expandSection(t.answerHeading)}
+                >
+                  {isAnswerExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                </button>
+                <div>
+                  <h2>{t.answerHeading}</h2>
+                  {isAnswerExpanded ? (
+                    <p>{responseMeta ? t.promptChars(responseMeta.content_chars) : t.ready}</p>
+                  ) : null}
+                </div>
               </div>
             </div>
 
-            {answer || responseMeta?.sources?.length ? (
-              <div className="answer-content">
-                {displayAnswer.body ? (
-                  <div className="answer-text">{displayAnswer.body}</div>
-                ) : null}
-                {displayAnswer.quotes.map((quote) => (
-                  <blockquote className="source-quote" key={quote}>
-                    {quote}
-                  </blockquote>
-                ))}
-                {responseMeta?.sources?.length ? (
-                  <section className="source-list" aria-labelledby="source-heading">
-                    <div className="source-list-header">
-                      <h3 id="source-heading">{t.sourceHeading}</h3>
-                      <span>{t.sourceMatches(responseMeta.sources.length)}</span>
-                    </div>
-                    {responseMeta.sources.map((source) => (
-                      <article className="source-card" key={`${source.file_id}-${source.quote}`}>
-                        <div className="source-card-header">
-                          <DocumentTypeIcon documentType={source.document_type} />
-                          <span>
-                            <strong>{source.name}</strong>
-                            <span>{source.file_id}</span>
-                          </span>
-                        </div>
-                        <blockquote className="source-quote compact">{source.quote}</blockquote>
-                      </article>
+            {isAnswerExpanded ? (
+              <div id="answer-content">
+                {answer || responseMeta?.sources?.length ? (
+                  <div className="answer-content">
+                    {displayAnswer.body ? (
+                      <div className="answer-text">{displayAnswer.body}</div>
+                    ) : null}
+                    {displayAnswer.quotes.map((quote) => (
+                      <blockquote className="source-quote" key={quote}>
+                        {quote}
+                      </blockquote>
                     ))}
-                  </section>
-                ) : null}
+                    {responseMeta?.sources?.length ? (
+                      <section className="source-list" aria-labelledby="source-heading">
+                        <div className="source-list-header">
+                          <h3 id="source-heading">{t.sourceHeading}</h3>
+                          <span>{t.sourceMatches(responseMeta.sources.length)}</span>
+                        </div>
+                        {responseMeta.sources.map((source) => (
+                          <article className="source-card" key={`${source.file_id}-${source.quote}`}>
+                            <div className="source-card-header">
+                              <DocumentTypeIcon documentType={source.document_type} />
+                              <span>
+                                <strong>{source.name}</strong>
+                                <span>{source.file_id}</span>
+                              </span>
+                            </div>
+                            <blockquote className="source-quote compact">{source.quote}</blockquote>
+                          </article>
+                        ))}
+                      </section>
+                    ) : null}
+                  </div>
+                ) : (
+                  <StatusLine
+                    icon={isAsking ? <Loader2 className="spin" size={18} /> : <FileText size={18} />}
+                    text={isAsking ? t.waitingModel : t.noAnswer}
+                  />
+                )}
               </div>
-            ) : (
-              <StatusLine
-                icon={isAsking ? <Loader2 className="spin" size={18} /> : <FileText size={18} />}
-                text={isAsking ? t.waitingModel : t.noAnswer}
-              />
-            )}
+            ) : null}
           </section>
         </section>
 
-        <section className="history-column" aria-labelledby="history-heading">
+        <section
+          className={`history-column${isHistoryExpanded ? '' : ' is-collapsed'}`}
+          aria-labelledby="history-heading"
+        >
           <div className="section-header">
-            <div>
-              <h2 id="history-heading">{t.historyHeading}</h2>
-              <p>{t.saved(historyItems.length)}</p>
-            </div>
-            <div className="history-actions">
+            <div className="section-title">
               <button
-                className="icon-button small"
+                className="collapse-toggle"
                 type="button"
-                onClick={() => void loadHistory()}
-                title={t.refreshHistoryTitle}
-                aria-label={t.refreshHistoryAria}
+                onClick={() => setIsHistoryExpanded((isExpanded) => !isExpanded)}
+                aria-expanded={isHistoryExpanded}
+                aria-controls="history-content"
+                title={isHistoryExpanded ? t.collapseSection(t.historyHeading) : t.expandSection(t.historyHeading)}
+                aria-label={isHistoryExpanded ? t.collapseSection(t.historyHeading) : t.expandSection(t.historyHeading)}
               >
-                <RefreshCw size={16} />
+                {isHistoryExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
               </button>
-              <button
-                className="danger-button compact"
-                type="button"
-                onClick={() => void clearHistory()}
-                disabled={!historyItems.length}
-                title={t.clearHistoryTitle}
-                aria-label={t.clearHistoryAria}
-              >
-                <Trash2 size={15} />
-                {t.clearHistory}
-              </button>
+              <div>
+                <h2 id="history-heading">{t.historyHeading}</h2>
+                {isHistoryExpanded ? <p>{t.saved(historyItems.length)}</p> : null}
+              </div>
             </div>
-          </div>
-
-          <div className="history-list" role="list">
-            {isLoadingHistory ? (
-              <StatusLine icon={<Loader2 className="spin" size={18} />} text={t.loadingHistory} />
-            ) : null}
-
-            {!isLoadingHistory && !historyItems.length ? (
-              <StatusLine icon={<HistoryIcon size={18} />} text={t.noSavedAnswers} />
-            ) : null}
-
-            {historyItems.map((item) => (
-              <article
-                className={`history-item${item.id === activeHistoryId ? ' is-active' : ''}`}
-                key={item.id}
-              >
+            {isHistoryExpanded ? (
+              <div className="history-actions">
                 <button
-                  className="history-open"
+                  className="icon-button small"
                   type="button"
-                  onClick={() => void openHistoryItem(item.id)}
+                  onClick={() => void loadHistory()}
+                  title={t.refreshHistoryTitle}
+                  aria-label={t.refreshHistoryAria}
                 >
-                  <span className="history-date">
-                    {formatHistoryDate(item.created_at, language, t.savedAnswer)}
-                  </span>
-                  <strong>{item.prompt || t.untitledQuestion}</strong>
-                  <span className="history-preview">{item.answer_preview || t.noAnswerContent}</span>
-                  <span className="history-meta">
-                    {t.filesCount(item.files.length)} - {item.model || t.defaultModel}
-                  </span>
+                  <RefreshCw size={16} />
                 </button>
                 <button
-                  className="history-delete"
+                  className="danger-button compact"
                   type="button"
-                  onClick={() => void deleteHistoryItem(item.id)}
-                  title={t.deleteHistoryTitle}
-                  aria-label={`${t.deleteHistoryAria}: ${item.prompt || t.untitledQuestion}`}
+                  onClick={() => void clearHistory()}
+                  disabled={!historyItems.length}
+                  title={t.clearHistoryTitle}
+                  aria-label={t.clearHistoryAria}
                 >
                   <Trash2 size={15} />
+                  {t.clearHistory}
                 </button>
-              </article>
-            ))}
+              </div>
+            ) : null}
           </div>
+
+          {isHistoryExpanded ? (
+            <div id="history-content" className="history-list" role="list">
+              {isLoadingHistory ? (
+                <StatusLine icon={<Loader2 className="spin" size={18} />} text={t.loadingHistory} />
+              ) : null}
+
+              {!isLoadingHistory && !historyItems.length ? (
+                <StatusLine icon={<HistoryIcon size={18} />} text={t.noSavedAnswers} />
+              ) : null}
+
+              {historyItems.map((item) => (
+                <article
+                  className={`history-item${item.id === activeHistoryId ? ' is-active' : ''}`}
+                  key={item.id}
+                >
+                  <button
+                    className="history-open"
+                    type="button"
+                    onClick={() => void openHistoryItem(item.id)}
+                  >
+                    <span className="history-date">
+                      {formatHistoryDate(item.created_at, language, t.savedAnswer)}
+                    </span>
+                    <strong>{item.prompt || t.untitledQuestion}</strong>
+                    <span className="history-preview">{item.answer_preview || t.noAnswerContent}</span>
+                    <span className="history-meta">
+                      {t.filesCount(item.files.length)} - {item.model || t.defaultModel}
+                    </span>
+                  </button>
+                  <button
+                    className="history-delete"
+                    type="button"
+                    onClick={() => void deleteHistoryItem(item.id)}
+                    title={t.deleteHistoryTitle}
+                    aria-label={`${t.deleteHistoryAria}: ${item.prompt || t.untitledQuestion}`}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </article>
+              ))}
+            </div>
+          ) : null}
         </section>
       </main>
 
