@@ -19,10 +19,13 @@ RedHatAI/Qwen3.6-35B-A3B-NVFP4
 
 ```bash
 cd /Users/sna/Desktop/projects/pdf-chat-completions
-python3 -m venv .venv
+./setup_python_env.sh
 source .venv/bin/activate
-pip install -e ".[dev]"
 ```
+
+The setup script checks Python 3.10+, creates `.venv`, installs editable developer
+dependencies, creates `.env` from `.env.example` when missing, and prepares the
+`docs` and `response` folders.
 
 ## Run The Service
 
