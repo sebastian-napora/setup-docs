@@ -476,7 +476,7 @@ textarea:focus,
   }
 }
 
-@media (max-width: 520px) {
+@media (max-width: 765px) {
   .app-shell {
     padding: 12px;
   }
