@@ -12,13 +12,17 @@ from pdf_chat_service.config import Settings
 from pdf_chat_service.document import DocumentExtractionError, extract_document_text
 from pdf_chat_service.docs_library import (
     DocumentLibraryError,
+    ExtractedLibraryDocument,
     LibraryDocument,
+    SourceSearchMatch,
     archive_library_document,
     build_docs_chat_prompt,
+    build_docs_source_search_prompt,
     delete_archived_library_document,
     extract_library_document,
     list_library_documents,
     save_library_upload,
+    search_extracted_documents,
     validate_library_upload,
 )
 from pdf_chat_service.history import (
@@ -55,6 +59,13 @@ class DocsChatRequest(BaseModel):
 
 class DeleteArchivedDocumentRequest(BaseModel):
     confirmation: str = Field(..., min_length=1)
+
+
+class DocsSourceSearchRequest(BaseModel):
+    files: list[str] = Field(default_factory=list)
+    prompt: str = Field(..., min_length=1)
+    stream: bool = False
+    model: str | None = None
 
 
 @app.get("/health")
@@ -185,18 +196,7 @@ async def chat_with_docs(request: DocsChatRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Select at least one document.")
 
     try:
-        documents = [
-            extract_library_document(
-                docs_dir=settings.docs_dir,
-                document_id=document_id,
-                max_chars=settings.max_pdf_chars,
-                image_chat_url=settings.image_chat_url,
-                image_chat_prompt=settings.image_chat_prompt,
-                image_chat_thinking=settings.image_chat_thinking,
-                timeout_seconds=settings.request_timeout_seconds,
-            )
-            for document_id in document_ids
-        ]
+        documents = extract_docs_by_id(document_ids)
         content = build_docs_chat_prompt(user_prompt=request.prompt, documents=documents)
     except (DocumentExtractionError, DocumentLibraryError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -234,6 +234,7 @@ async def chat_with_docs(request: DocsChatRequest) -> dict[str, Any]:
         response_dir=settings.response_dir,
     )
     request_info = {
+        "mode": "chat",
         "model": payload["model"],
         "stream": payload["stream"],
         "content_chars": len(content),
@@ -259,6 +260,97 @@ async def chat_with_docs(request: DocsChatRequest) -> dict[str, Any]:
     return {
         "request": request_info,
         "answer": answer,
+        "history_item": history_record,
+        "saved_response": str(response_path),
+        "completion": completion,
+    }
+
+
+@app.post("/api/docs/search")
+async def search_docs_sources(request: DocsSourceSearchRequest) -> dict[str, Any]:
+    document_ids = unique_document_ids(request.files)
+
+    try:
+        if not document_ids:
+            document_ids = [document.id for document in list_library_documents(settings.docs_dir)]
+        if not document_ids:
+            raise HTTPException(status_code=400, detail="No documents available.")
+
+        documents = extract_docs_by_id(document_ids)
+        matches = search_extracted_documents(
+            user_prompt=request.prompt,
+            documents=documents,
+            max_matches=settings.source_search_max_matches,
+            chunk_chars=settings.source_search_chunk_chars,
+            chunk_overlap=settings.source_search_chunk_overlap,
+        )
+        content = build_docs_source_search_prompt(user_prompt=request.prompt, matches=matches)
+    except (DocumentExtractionError, DocumentLibraryError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    payload = build_chat_payload(
+        content,
+        model=request.model or settings.chat_model,
+        stream=request.stream,
+    )
+
+    try:
+        completion = await post_chat_completion(
+            url=settings.chat_completions_url,
+            payload=payload,
+            timeout_seconds=settings.request_timeout_seconds,
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail={
+                "message": "Chat completions endpoint returned an error.",
+                "response": exc.response.text,
+            },
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not reach chat completions endpoint: {exc}",
+        ) from exc
+
+    answer = render_choices_markdown(completion).strip()
+    response_path = save_completion_choices_markdown(
+        completion=completion,
+        input_filename="docs-source-search",
+        response_dir=settings.response_dir,
+    )
+    sources = [source_search_match_payload(match) for match in matches]
+    request_info = {
+        "mode": "source_search",
+        "model": payload["model"],
+        "stream": payload["stream"],
+        "content_chars": len(content),
+        "document_chars": sum(len(document.text) for document in documents),
+        "source_count": len(sources),
+        "sources": sources,
+        "files": [
+            {
+                "id": document.id,
+                "name": document.name,
+                "document_type": document.document_type,
+                "chars": len(document.text),
+            }
+            for document in documents
+        ],
+    }
+    history_record = save_docs_chat_history(
+        response_dir=settings.response_dir,
+        prompt=request.prompt,
+        answer=answer,
+        request_info=request_info,
+        saved_response=str(response_path),
+    )
+
+    return {
+        "request": request_info,
+        "answer": answer,
+        "sources": sources,
         "history_item": history_record,
         "saved_response": str(response_path),
         "completion": completion,
@@ -359,12 +451,37 @@ def unique_document_ids(document_ids: list[str]) -> list[str]:
     return unique_ids
 
 
+def extract_docs_by_id(document_ids: list[str]) -> list[ExtractedLibraryDocument]:
+    return [
+        extract_library_document(
+            docs_dir=settings.docs_dir,
+            document_id=document_id,
+            max_chars=settings.max_pdf_chars,
+            image_chat_url=settings.image_chat_url,
+            image_chat_prompt=settings.image_chat_prompt,
+            image_chat_thinking=settings.image_chat_thinking,
+            timeout_seconds=settings.request_timeout_seconds,
+        )
+        for document_id in document_ids
+    ]
+
+
 def library_document_payload(document: LibraryDocument) -> dict[str, Any]:
     return {
         "id": document.id,
         "name": document.name,
         "size_bytes": document.size_bytes,
         "document_type": document.document_type,
+    }
+
+
+def source_search_match_payload(match: SourceSearchMatch) -> dict[str, Any]:
+    return {
+        "file_id": match.file_id,
+        "name": match.name,
+        "document_type": match.document_type,
+        "quote": match.quote,
+        "score": match.score,
     }
 
 

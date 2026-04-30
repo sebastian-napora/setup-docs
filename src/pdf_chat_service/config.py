@@ -17,5 +17,8 @@ class Settings(BaseSettings):
     docs_dir: Path = Path("docs")
     docs_archive_dir: Path = Path("docs_archive")
     response_dir: Path = Path("response")
+    source_search_max_matches: int = 8
+    source_search_chunk_chars: int = 1_200
+    source_search_chunk_overlap: int = 160
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

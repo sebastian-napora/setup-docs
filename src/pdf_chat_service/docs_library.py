@@ -30,6 +30,65 @@ Answer: the answer
 Quote: "exact sentence from the file"
 If the answer is not present, say that it was not found in the selected files."""
 
+SOURCE_SEARCH_INSTRUCTION = """Answer only from the retrieved source passages.
+Tell the user which file or files contain the requested information.
+Always include the exact supporting sentence or passage as a quote.
+For image files, the available source text is the image analysis returned by the image model.
+Use plain text only, without XML or HTML tags.
+If the requested information is not present in the retrieved passages, say that it was not found."""
+
+WORD_PATTERN = re.compile(r"\w+", re.UNICODE)
+STOPWORDS = {
+    "about",
+    "after",
+    "also",
+    "and",
+    "are",
+    "because",
+    "but",
+    "can",
+    "czy",
+    "dla",
+    "does",
+    "file",
+    "find",
+    "from",
+    "gdzie",
+    "get",
+    "jak",
+    "jaka",
+    "jakie",
+    "jest",
+    "ktora",
+    "ktore",
+    "ktory",
+    "lub",
+    "ma",
+    "mam",
+    "mamy",
+    "miejsce",
+    "nie",
+    "oraz",
+    "plik",
+    "pliku",
+    "please",
+    "podaj",
+    "pokaz",
+    "proszę",
+    "search",
+    "sie",
+    "się",
+    "that",
+    "the",
+    "this",
+    "what",
+    "where",
+    "which",
+    "with",
+    "znajdz",
+    "znajdź",
+}
+
 
 class DocumentLibraryError(ValueError):
     pass
@@ -50,6 +109,22 @@ class ExtractedLibraryDocument:
     name: str
     document_type: str
     text: str
+
+
+@dataclass(frozen=True)
+class SourceSearchMatch:
+    file_id: str
+    name: str
+    document_type: str
+    quote: str
+    score: float
+
+
+@dataclass(frozen=True)
+class DocumentSearchChunk:
+    document: ExtractedLibraryDocument
+    text: str
+    index: int
 
 
 def list_library_documents(docs_dir: Path) -> list[LibraryDocument]:
@@ -303,3 +378,240 @@ def build_docs_chat_prompt(*, user_prompt: str, documents: list[ExtractedLibrary
         )
 
     return "\n\n".join(parts)
+
+
+def search_extracted_documents(
+    *,
+    user_prompt: str,
+    documents: list[ExtractedLibraryDocument],
+    max_matches: int = 8,
+    chunk_chars: int = 1_200,
+    chunk_overlap: int = 160,
+) -> list[SourceSearchMatch]:
+    user_prompt = user_prompt.strip()
+    if not user_prompt:
+        raise DocumentLibraryError("Prompt cannot be empty.")
+    if not documents:
+        raise DocumentLibraryError("At least one document must be selected.")
+    if max_matches < 1:
+        raise DocumentLibraryError("Maximum source matches must be at least 1.")
+
+    query_terms = normalized_terms(user_prompt)
+    scored_chunks: list[tuple[float, int, DocumentSearchChunk]] = []
+    fallback_chunks: list[DocumentSearchChunk] = []
+    sequence = 0
+
+    for document in documents:
+        for chunk in chunk_document_text(
+            document=document,
+            chunk_chars=chunk_chars,
+            chunk_overlap=chunk_overlap,
+        ):
+            if not chunk.text:
+                continue
+            if chunk.index == 0 and len(fallback_chunks) < max_matches:
+                fallback_chunks.append(chunk)
+            score = score_search_chunk(chunk=chunk, query_terms=query_terms, raw_query=user_prompt)
+            if score > 0:
+                scored_chunks.append((score, sequence, chunk))
+            sequence += 1
+
+    if not scored_chunks:
+        fallback = fallback_chunks[:max_matches]
+        return [
+            SourceSearchMatch(
+                file_id=chunk.document.id,
+                name=chunk.document.name,
+                document_type=chunk.document.document_type,
+                quote=clean_source_quote(chunk.text),
+                score=0.0,
+            )
+            for chunk in fallback
+        ]
+
+    scored_chunks.sort(key=lambda item: (-item[0], item[1]))
+    matches: list[SourceSearchMatch] = []
+    matches_per_file: dict[str, int] = {}
+    max_matches_per_file = 2 if max_matches > 2 else 1
+
+    for score, _sequence, chunk in scored_chunks:
+        current_count = matches_per_file.get(chunk.document.id, 0)
+        if current_count >= max_matches_per_file:
+            continue
+
+        matches.append(
+            SourceSearchMatch(
+                file_id=chunk.document.id,
+                name=chunk.document.name,
+                document_type=chunk.document.document_type,
+                quote=clean_source_quote(chunk.text),
+                score=round(score, 4),
+            )
+        )
+        matches_per_file[chunk.document.id] = current_count + 1
+
+        if len(matches) >= max_matches:
+            break
+
+    return matches
+
+
+def build_docs_source_search_prompt(
+    *,
+    user_prompt: str,
+    matches: list[SourceSearchMatch],
+) -> str:
+    user_prompt = user_prompt.strip()
+    if not user_prompt:
+        raise DocumentLibraryError("Prompt cannot be empty.")
+    if not matches:
+        raise DocumentLibraryError("No source passages were found.")
+
+    parts = [
+        SOURCE_SEARCH_INSTRUCTION,
+        f"User request:\n{user_prompt}",
+        "Retrieved source passages:",
+    ]
+
+    for index, match in enumerate(matches, start=1):
+        parts.append(
+            "\n".join(
+                [
+                    f"--- SOURCE {index}: {match.file_id} ({match.document_type}) ---",
+                    match.quote,
+                    f"--- END SOURCE {index}: {match.file_id} ---",
+                ]
+            )
+        )
+
+    return "\n\n".join(parts)
+
+
+def chunk_document_text(
+    *,
+    document: ExtractedLibraryDocument,
+    chunk_chars: int,
+    chunk_overlap: int,
+) -> list[DocumentSearchChunk]:
+    text = document.text.strip()
+    if not text:
+        return []
+
+    chunk_chars = max(300, chunk_chars)
+    chunk_overlap = min(max(0, chunk_overlap), chunk_chars // 2)
+    paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+    chunks: list[str] = []
+    current_parts: list[str] = []
+    current_length = 0
+
+    for paragraph in paragraphs:
+        if len(paragraph) > chunk_chars:
+            if current_parts:
+                chunks.append("\n\n".join(current_parts))
+                current_parts = []
+                current_length = 0
+            chunks.extend(split_long_text(paragraph, chunk_chars=chunk_chars, overlap=chunk_overlap))
+            continue
+
+        next_length = current_length + len(paragraph) + (2 if current_parts else 0)
+        if current_parts and next_length > chunk_chars:
+            chunks.append("\n\n".join(current_parts))
+            current_parts = [paragraph]
+            current_length = len(paragraph)
+        else:
+            current_parts.append(paragraph)
+            current_length = next_length
+
+    if current_parts:
+        chunks.append("\n\n".join(current_parts))
+
+    return [
+        DocumentSearchChunk(document=document, text=chunk.strip(), index=index)
+        for index, chunk in enumerate(chunks)
+        if chunk.strip()
+    ]
+
+
+def split_long_text(text: str, *, chunk_chars: int, overlap: int) -> list[str]:
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + chunk_chars)
+        chunks.append(text[start:end].strip())
+        if end >= len(text):
+            break
+        start = max(start + 1, end - overlap)
+    return chunks
+
+
+def score_search_chunk(
+    *,
+    chunk: DocumentSearchChunk,
+    query_terms: list[str],
+    raw_query: str,
+) -> float:
+    if not query_terms:
+        return 0.0
+
+    chunk_text = chunk.text.lower()
+    file_text = f"{chunk.document.id} {chunk.document.name}".lower()
+    chunk_terms = set(normalized_terms(chunk.text, keep_stopwords=True))
+    file_terms = set(normalized_terms(file_text, keep_stopwords=True))
+    score = 0.0
+
+    for term in query_terms:
+        if term in chunk_terms:
+            score += 4.0
+            score += min(chunk_text.count(term), 5) * 0.5
+        elif term_has_shared_prefix(term, chunk_terms):
+            score += 2.0
+
+        if term in file_terms:
+            score += 1.5
+        elif term_has_shared_prefix(term, file_terms):
+            score += 0.75
+
+    normalized_query = " ".join(query_terms)
+    if len(normalized_query) >= 8 and normalized_query in chunk_text:
+        score += 6.0
+
+    raw_query = re.sub(r"\s+", " ", raw_query.lower()).strip()
+    if len(raw_query) >= 8 and raw_query in chunk_text:
+        score += 8.0
+
+    return score
+
+
+def normalized_terms(value: str, *, keep_stopwords: bool = False) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    for match in WORD_PATTERN.finditer(value.lower()):
+        term = match.group(0).strip("_")
+        if len(term) < 3 and not term.isdigit():
+            continue
+        if not keep_stopwords and term in STOPWORDS:
+            continue
+        if term not in seen:
+            terms.append(term)
+            seen.add(term)
+
+    return terms
+
+
+def term_has_shared_prefix(term: str, candidates: set[str]) -> bool:
+    if len(term) < 5:
+        return False
+
+    prefix = term[:5]
+    return any(
+        len(candidate) >= 5 and (candidate.startswith(prefix) or term.startswith(candidate[:5]))
+        for candidate in candidates
+    )
+
+
+def clean_source_quote(value: str, max_chars: int = 900) -> str:
+    quote = re.sub(r"\s+", " ", value).strip()
+    if len(quote) <= max_chars:
+        return quote
+    return quote[: max_chars - 3].rstrip() + "..."

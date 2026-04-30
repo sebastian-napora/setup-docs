@@ -7,10 +7,12 @@ from pdf_chat_service.docs_library import (
     ExtractedLibraryDocument,
     archive_library_document,
     build_docs_chat_prompt,
+    build_docs_source_search_prompt,
     delete_archived_library_document,
     list_library_documents,
     resolve_library_document,
     save_library_upload,
+    search_extracted_documents,
 )
 
 
@@ -181,3 +183,53 @@ def test_build_docs_chat_prompt_requires_source_sentence_answer() -> None:
     assert "<answer>" not in prompt
     assert "data urodziny corki" in prompt
     assert "--- FILE: answers.md (markdown) ---" in prompt
+
+
+def test_search_extracted_documents_returns_matching_files_and_quotes() -> None:
+    matches = search_extracted_documents(
+        user_prompt="expired token login",
+        documents=[
+            ExtractedLibraryDocument(
+                id="billing.md",
+                name="billing.md",
+                document_type="markdown",
+                text="Invoices are exported on the first day of each month.",
+            ),
+            ExtractedLibraryDocument(
+                id="screenshots/error.png",
+                name="error.png",
+                document_type="image",
+                text="Screenshot shows login failed because the session token expired.",
+            ),
+        ],
+        max_matches=3,
+    )
+
+    assert matches[0].file_id == "screenshots/error.png"
+    assert matches[0].document_type == "image"
+    assert "token expired" in matches[0].quote
+
+
+def test_build_docs_source_search_prompt_mentions_files_and_sources() -> None:
+    matches = search_extracted_documents(
+        user_prompt="installation requirements",
+        documents=[
+            ExtractedLibraryDocument(
+                id="manual.md",
+                name="manual.md",
+                document_type="markdown",
+                text="Installation requires Python 3.10 and at least 8 GB RAM.",
+            )
+        ],
+        max_matches=1,
+    )
+
+    prompt = build_docs_source_search_prompt(
+        user_prompt="installation requirements",
+        matches=matches,
+    )
+
+    assert "which file or files contain" in prompt
+    assert "without XML or HTML tags" in prompt
+    assert "--- SOURCE 1: manual.md (markdown) ---" in prompt
+    assert "Installation requires Python 3.10" in prompt

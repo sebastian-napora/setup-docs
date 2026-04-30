@@ -27,7 +27,7 @@ source .venv/bin/activate
 
 The setup script checks Python 3.10+, creates `.venv`, installs editable developer
 dependencies, creates `.env` from `.env.example` when missing, and prepares the
-`docs` and `response` folders.
+`docs`, `docs_archive`, and `response` folders.
 
 Image support uses the dedicated image analysis endpoint configured by `IMAGE_CHAT_URL`.
 That endpoint must be backed by a model/server that accepts image inputs.
@@ -143,7 +143,12 @@ in `./response`. The API response includes the generated path:
 The React app lists PDF, Markdown, and image files from `./docs`, lets you add files
 into that folder, archive files into `./docs_archive`, permanently delete archived
 files after typing `USUWAM`, select files with checkboxes, and send the selected text
-plus your question to the model.
+plus your question to the model. In the `Pytanie` section, the
+`Znajdź kontekst w plikach` checkbox switches the same submit flow into source search:
+it extracts text from the selected PDFs, Markdown files, and images, ranks the best
+passages, asks the model over those passages, and shows the matched filenames with
+quote snippets. If no files are selected in source search mode, the app searches all
+active files in `./docs`.
 
 Start both together:
 
@@ -180,6 +185,7 @@ POST /api/docs/files/{document_id}/archive
 GET  /api/docs/archive
 DELETE /api/docs/archive/{document_id}
 POST /api/docs/chat
+POST /api/docs/search
 ```
 
 `/api/docs/chat` adds an instruction before the selected document text so the model
@@ -187,6 +193,23 @@ returns the answer together with the exact source sentence, for example:
 
 ```text
 some date -> "some sentence from the selected files"
+```
+
+`/api/docs/search` is for finding where information lives. It uses the same PDF,
+Markdown, and image extraction path, splits the extracted text into passages, ranks
+the passages against the question, and returns source matches like the example
+below. Send an empty or omitted `files` list to search all active docs:
+
+```json
+{
+  "sources": [
+    {
+      "file_id": "screenshots/login-error.png",
+      "document_type": "image",
+      "quote": "Screenshot shows login failed because the session token expired."
+    }
+  ]
+}
 ```
 
 Build the React app for FastAPI static serving:
@@ -252,6 +275,9 @@ export COMPRESS_URL="http://0.0.0.0:11112/compress"
 export DOCS_DIR="docs"
 export DOCS_ARCHIVE_DIR="docs_archive"
 export RESPONSE_DIR="response"
+export SOURCE_SEARCH_MAX_MATCHES="8"
+export SOURCE_SEARCH_CHUNK_CHARS="1200"
+export SOURCE_SEARCH_CHUNK_OVERLAP="160"
 ```
 
 `MAX_PDF_CHARS` prevents accidentally sending an extremely large prompt. Set it to `0`

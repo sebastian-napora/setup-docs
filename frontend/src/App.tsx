@@ -44,11 +44,24 @@ type DocsChatFileMeta = {
   chars: number
 }
 
+type SourceMatch = {
+  file_id: string
+  name: string
+  document_type: string
+  quote: string
+  score: number
+}
+
+type RequestMode = 'chat' | 'source_search'
+
 type DocsChatRequestMeta = {
+  mode?: RequestMode
   model: string
   stream: boolean
   content_chars: number
   document_chars: number
+  source_count?: number
+  sources?: SourceMatch[]
   files: DocsChatFileMeta[]
 }
 
@@ -64,6 +77,7 @@ type CompletionContent = string | Array<string | { text?: string }> | null | und
 type DocsChatResponse = {
   answer?: string
   request?: DocsChatRequestMeta
+  sources?: SourceMatch[]
   history_item?: DocsHistoryRecord
   completion?: {
     choices?: CompletionChoice[]
@@ -137,8 +151,12 @@ type Translations = {
   promptPlaceholder: string
   asking: string
   askAi: string
+  findingSources: string
+  findContextInFiles: string
   answerHeading: string
   promptChars: (count: number) => string
+  sourceHeading: string
+  sourceMatches: (count: number) => string
   ready: string
   waitingModel: string
   noAnswer: string
@@ -172,6 +190,7 @@ type Translations = {
   archiveFilesError: string
   loadArchiveError: string
   deleteArchivedError: string
+  searchSourcesError: string
   unexpectedError: string
 }
 
@@ -213,8 +232,12 @@ const TRANSLATIONS: Record<Language, Translations> = {
     promptPlaceholder: 'np. data urodzin córki',
     asking: 'Pytam',
     askAi: 'Zapytaj AI',
+    findingSources: 'Szukam',
+    findContextInFiles: 'Znajdź kontekst w plikach',
     answerHeading: 'Odpowiedź',
     promptChars: (count) => `${count} znaków promptu`,
+    sourceHeading: 'Źródła',
+    sourceMatches: (count) => `${count} dopasowań`,
     ready: 'Gotowe',
     waitingModel: 'Czekam na model',
     noAnswer: 'Brak odpowiedzi',
@@ -248,6 +271,7 @@ const TRANSLATIONS: Record<Language, Translations> = {
     archiveFilesError: 'Nie udało się przenieść pliku do archiwum.',
     loadArchiveError: 'Nie udało się załadować archiwum.',
     deleteArchivedError: 'Nie udało się usunąć pliku z archiwum.',
+    searchSourcesError: 'Nie udało się znaleźć źródeł.',
     unexpectedError: 'Wystąpił nieoczekiwany błąd.',
   },
   en: {
@@ -283,8 +307,12 @@ const TRANSLATIONS: Record<Language, Translations> = {
     promptPlaceholder: 'e.g. daughter birth date',
     asking: 'Asking',
     askAi: 'Ask AI',
+    findingSources: 'Searching',
+    findContextInFiles: 'Find context in files',
     answerHeading: 'Answer',
     promptChars: (count) => `${count} prompt chars`,
+    sourceHeading: 'Sources',
+    sourceMatches: (count) => `${count} matches`,
     ready: 'Ready',
     waitingModel: 'Waiting for model',
     noAnswer: 'No answer yet',
@@ -318,6 +346,7 @@ const TRANSLATIONS: Record<Language, Translations> = {
     archiveFilesError: 'Could not move file to archive.',
     loadArchiveError: 'Could not load archive.',
     deleteArchivedError: 'Could not delete archived file.',
+    searchSourcesError: 'Could not find sources.',
     unexpectedError: 'Unexpected error.',
   },
 }
@@ -330,6 +359,7 @@ function App() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [query, setQuery] = useState('')
   const [prompt, setPrompt] = useState('')
+  const [findContextInFiles, setFindContextInFiles] = useState(false)
   const [answer, setAnswer] = useState('')
   const [responseMeta, setResponseMeta] = useState<DocsChatRequestMeta | null>(null)
   const [historyItems, setHistoryItems] = useState<DocsHistoryItem[]>([])
@@ -338,13 +368,14 @@ function App() {
   const [isLoadingDocs, setIsLoadingDocs] = useState(true)
   const [isLoadingArchive, setIsLoadingArchive] = useState(true)
   const [isLoadingHistory, setIsLoadingHistory] = useState(true)
-  const [isAsking, setIsAsking] = useState(false)
+  const [activeRequestMode, setActiveRequestMode] = useState<RequestMode | null>(null)
   const [isUploading, setIsUploading] = useState(false)
   const [archivingId, setArchivingId] = useState<string | null>(null)
   const [deleteCandidate, setDeleteCandidate] = useState<DocsFile | null>(null)
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [isDeletingArchived, setIsDeletingArchived] = useState(false)
   const t = TRANSLATIONS[language]
+  const isAsking = activeRequestMode !== null
 
   useEffect(() => {
     document.documentElement.lang = language
@@ -423,6 +454,13 @@ function App() {
   const selectedDocuments = useMemo(
     () => documents.filter((document) => selectedIds.has(document.id)),
     [documents, selectedIds],
+  )
+  const contextDocuments = useMemo(
+    () =>
+      findContextInFiles && selectedIds.size === 0
+        ? documents
+        : selectedDocuments,
+    [documents, findContextInFiles, selectedDocuments, selectedIds.size],
   )
   const displayAnswer = useMemo(() => parseDisplayAnswer(answer), [answer])
 
@@ -644,33 +682,46 @@ function App() {
 
   async function askModel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!prompt.trim() || selectedIds.size === 0 || isAsking) {
+    await submitDocsQuestion(findContextInFiles ? 'source_search' : 'chat')
+  }
+
+  async function submitDocsQuestion(mode: RequestMode) {
+    const selectedFiles = [...selectedIds]
+    const files =
+      mode === 'source_search' && selectedFiles.length === 0
+        ? documents.map((document) => document.id)
+        : selectedFiles
+
+    if (!prompt.trim() || !files.length || isAsking) {
       return
     }
 
-    setIsAsking(true)
+    setActiveRequestMode(mode)
     setError('')
     setAnswer('')
     setResponseMeta(null)
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/docs/chat`, {
+      const endpoint = mode === 'source_search' ? '/api/docs/search' : '/api/docs/chat'
+      const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          files: [...selectedIds],
+          files,
           prompt,
         }),
       })
       const data = (await response.json()) as DocsChatResponse
       if (!response.ok) {
-        throw new Error(readApiError(data.detail, t.askError))
+        throw new Error(
+          readApiError(data.detail, mode === 'source_search' ? t.searchSourcesError : t.askError),
+        )
       }
 
       setAnswer(normalizeAnswer(data))
-      setResponseMeta(data.request ?? null)
+      setResponseMeta(mergeResponseSources(data))
       if (data.history_item) {
         setActiveHistoryId(data.history_item.id)
         setHistoryItems((currentItems) => [
@@ -683,7 +734,7 @@ function App() {
     } catch (askError) {
       setError(errorMessage(askError, t.unexpectedError))
     } finally {
-      setIsAsking(false)
+      setActiveRequestMode(null)
     }
   }
 
@@ -701,6 +752,7 @@ function App() {
       setPrompt(data.prompt ?? '')
       setAnswer(removeAnswerTags(data.answer ?? '').trim())
       setResponseMeta(data.request ?? null)
+      setFindContextInFiles(data.request?.mode === 'source_search')
       setSelectedIds(new Set((data.request?.files ?? []).map((file) => file.id)))
     } catch (historyError) {
       setError(errorMessage(historyError, t.unexpectedError))
@@ -927,7 +979,7 @@ function App() {
             <div className="section-header">
               <div>
                 <h2 id="question-heading">{t.questionHeading}</h2>
-                <p>{t.filesInContext(selectedDocuments.length)}</p>
+                <p>{t.filesInContext(contextDocuments.length)}</p>
               </div>
             </div>
 
@@ -938,14 +990,36 @@ function App() {
               rows={8}
             />
 
+            <label className="context-option">
+              <input
+                type="checkbox"
+                checked={findContextInFiles}
+                onChange={(event) => setFindContextInFiles(event.target.checked)}
+              />
+              <span>{t.findContextInFiles}</span>
+            </label>
+
             <div className="actions">
               <button
                 className="primary-button"
                 type="submit"
-                disabled={!prompt.trim() || selectedIds.size === 0 || isAsking}
+                disabled={
+                  !prompt.trim() ||
+                  (!findContextInFiles && selectedIds.size === 0) ||
+                  (findContextInFiles && documents.length === 0) ||
+                  isAsking
+                }
               >
-                {isAsking ? <Loader2 className="spin" size={18} /> : <Send size={18} />}
-                {isAsking ? t.asking : t.askAi}
+                {activeRequestMode ? (
+                  <Loader2 className="spin" size={18} />
+                ) : (
+                  <Send size={18} />
+                )}
+                {activeRequestMode === 'source_search'
+                  ? t.findingSources
+                  : activeRequestMode === 'chat'
+                    ? t.asking
+                    : t.askAi}
               </button>
             </div>
           </form>
@@ -960,7 +1034,7 @@ function App() {
               </div>
             </div>
 
-            {answer ? (
+            {answer || responseMeta?.sources?.length ? (
               <div className="answer-content">
                 {displayAnswer.body ? (
                   <div className="answer-text">{displayAnswer.body}</div>
@@ -970,6 +1044,26 @@ function App() {
                     {quote}
                   </blockquote>
                 ))}
+                {responseMeta?.sources?.length ? (
+                  <section className="source-list" aria-labelledby="source-heading">
+                    <div className="source-list-header">
+                      <h3 id="source-heading">{t.sourceHeading}</h3>
+                      <span>{t.sourceMatches(responseMeta.sources.length)}</span>
+                    </div>
+                    {responseMeta.sources.map((source) => (
+                      <article className="source-card" key={`${source.file_id}-${source.quote}`}>
+                        <div className="source-card-header">
+                          <DocumentTypeIcon documentType={source.document_type} />
+                          <span>
+                            <strong>{source.name}</strong>
+                            <span>{source.file_id}</span>
+                          </span>
+                        </div>
+                        <blockquote className="source-quote compact">{source.quote}</blockquote>
+                      </article>
+                    ))}
+                  </section>
+                ) : null}
               </div>
             ) : (
               <StatusLine
@@ -1164,6 +1258,17 @@ function normalizeAnswer(data: DocsChatResponse) {
     .join('\n\n')
 
   return removeAnswerTags(answer).trim()
+}
+
+function mergeResponseSources(data: DocsChatResponse): DocsChatRequestMeta | null {
+  if (!data.request) {
+    return null
+  }
+
+  return {
+    ...data.request,
+    sources: data.request.sources ?? data.sources ?? [],
+  }
 }
 
 function historyRecordToItem(record: DocsHistoryRecord): DocsHistoryItem {

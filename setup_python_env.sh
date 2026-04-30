@@ -115,7 +115,7 @@ install_dependencies() {
 }
 
 prepare_project_files() {
-  mkdir -p "${ROOT_DIR}/docs" "${ROOT_DIR}/response"
+  mkdir -p "${ROOT_DIR}/docs" "${ROOT_DIR}/docs_archive" "${ROOT_DIR}/response"
 
   if [ "${CREATE_ENV_FILE}" = "1" ] && [ -f "${ROOT_DIR}/.env.example" ] && [ ! -f "${ROOT_DIR}/.env" ]; then
     cp "${ROOT_DIR}/.env.example" "${ROOT_DIR}/.env"
