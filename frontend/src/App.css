@@ -127,6 +127,21 @@
   font-size: 13px;
 }
 
+.upload-input {
+  display: none;
+}
+
+.upload-button {
+  border-color: #9fc9bc;
+  background: #f0faf6;
+  color: #145544;
+}
+
+.upload-button:hover:not(:disabled) {
+  border-color: #28715f;
+  background: #e4f5ee;
+}
+
 .danger-button {
   border-color: #f1a0a0;
   background: #fff5f5;

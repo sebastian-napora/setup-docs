@@ -10,8 +10,9 @@ import {
   Send,
   Square,
   Trash2,
+  Upload,
 } from 'lucide-react'
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 type DocsFile = {
@@ -22,6 +23,11 @@ type DocsFile = {
 }
 
 type DocsFilesResponse = {
+  files?: DocsFile[]
+  detail?: ApiDetail
+}
+
+type DocsUploadResponse = {
   files?: DocsFile[]
   detail?: ApiDetail
 }
@@ -102,6 +108,8 @@ type Translations = {
   selected: (count: number) => string
   selectAll: string
   clear: string
+  addFiles: string
+  uploadingFiles: string
   searchFiles: string
   loadingFiles: string
   noDocsFiles: string
@@ -141,11 +149,13 @@ type Translations = {
   openHistoryError: string
   deleteHistoryError: string
   clearHistoryError: string
+  uploadFilesError: string
   unexpectedError: string
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 const LANGUAGE_STORAGE_KEY = 'docs-chat-language'
+const DOCUMENT_UPLOAD_ACCEPT = '.pdf,.md,.markdown,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff'
 
 const TRANSLATIONS: Record<Language, Translations> = {
   pl: {
@@ -157,6 +167,8 @@ const TRANSLATIONS: Record<Language, Translations> = {
     selected: (count) => `${count} wybrano`,
     selectAll: 'Wszystkie',
     clear: 'Wyczyść',
+    addFiles: 'Dodaj',
+    uploadingFiles: 'Dodaję',
     searchFiles: 'Szukaj plików',
     loadingFiles: 'Ładowanie plików',
     noDocsFiles: 'Brak plików PDF, Markdown lub obrazów',
@@ -196,6 +208,7 @@ const TRANSLATIONS: Record<Language, Translations> = {
     openHistoryError: 'Nie udało się otworzyć elementu historii.',
     deleteHistoryError: 'Nie udało się usunąć wpisu historii.',
     clearHistoryError: 'Nie udało się wyczyścić historii.',
+    uploadFilesError: 'Nie udało się dodać plików.',
     unexpectedError: 'Wystąpił nieoczekiwany błąd.',
   },
   en: {
@@ -207,6 +220,8 @@ const TRANSLATIONS: Record<Language, Translations> = {
     selected: (count) => `${count} selected`,
     selectAll: 'All',
     clear: 'Clear',
+    addFiles: 'Add',
+    uploadingFiles: 'Adding',
     searchFiles: 'Search files',
     loadingFiles: 'Loading files',
     noDocsFiles: 'No PDF, Markdown, or image files',
@@ -246,11 +261,13 @@ const TRANSLATIONS: Record<Language, Translations> = {
     openHistoryError: 'Could not open history item.',
     deleteHistoryError: 'Could not delete history item.',
     clearHistoryError: 'Could not clear history.',
+    uploadFilesError: 'Could not add files.',
     unexpectedError: 'Unexpected error.',
   },
 }
 
 function App() {
+  const uploadInputRef = useRef<HTMLInputElement | null>(null)
   const [language, setLanguage] = useState<Language>(getInitialLanguage)
   const [documents, setDocuments] = useState<DocsFile[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
@@ -264,6 +281,7 @@ function App() {
   const [isLoadingDocs, setIsLoadingDocs] = useState(true)
   const [isLoadingHistory, setIsLoadingHistory] = useState(true)
   const [isAsking, setIsAsking] = useState(false)
+  const [isUploading, setIsUploading] = useState(false)
   const t = TRANSLATIONS[language]
 
   useEffect(() => {
@@ -402,6 +420,45 @@ function App() {
 
   function clearSelection() {
     setSelectedIds(new Set())
+  }
+
+  async function uploadDocuments(fileList: FileList | null) {
+    const files = Array.from(fileList ?? [])
+    if (!files.length || isUploading) {
+      return
+    }
+
+    setIsUploading(true)
+    setError('')
+
+    try {
+      const formData = new FormData()
+      files.forEach((file) => formData.append('files', file))
+
+      const response = await fetch(`${API_BASE_URL}/api/docs/files`, {
+        method: 'POST',
+        body: formData,
+      })
+      const data = (await response.json()) as DocsUploadResponse
+      if (!response.ok) {
+        throw new Error(readApiError(data.detail, t.uploadFilesError))
+      }
+
+      await loadDocuments()
+      const uploadedFiles = Array.isArray(data.files) ? data.files : []
+      setSelectedIds((currentSelection) => {
+        const nextSelection = new Set(currentSelection)
+        uploadedFiles.forEach((file) => nextSelection.add(file.id))
+        return nextSelection
+      })
+    } catch (uploadError) {
+      setError(errorMessage(uploadError, t.unexpectedError))
+    } finally {
+      setIsUploading(false)
+      if (uploadInputRef.current) {
+        uploadInputRef.current.value = ''
+      }
+    }
   }
 
   async function askModel(event: FormEvent<HTMLFormElement>) {
@@ -562,6 +619,23 @@ function App() {
               <p>{t.selected(selectedIds.size)}</p>
             </div>
             <div className="button-row">
+              <input
+                ref={uploadInputRef}
+                className="upload-input"
+                type="file"
+                multiple
+                accept={DOCUMENT_UPLOAD_ACCEPT}
+                onChange={(event) => void uploadDocuments(event.target.files)}
+              />
+              <button
+                className="upload-button"
+                type="button"
+                onClick={() => uploadInputRef.current?.click()}
+                disabled={isUploading}
+              >
+                {isUploading ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+                {isUploading ? t.uploadingFiles : t.addFiles}
+              </button>
               <button type="button" onClick={selectAllVisible} disabled={!filteredDocuments.length}>
                 <CheckSquare size={16} />
                 {t.selectAll}

@@ -15,6 +15,8 @@ from pdf_chat_service.docs_library import (
     build_docs_chat_prompt,
     extract_library_document,
     list_library_documents,
+    save_library_upload,
+    validate_library_upload,
 )
 from pdf_chat_service.history import (
     ChatHistoryError,
@@ -57,6 +59,46 @@ async def health() -> dict[str, str]:
 async def list_docs_files() -> dict[str, Any]:
     try:
         documents = list_library_documents(settings.docs_dir)
+    except DocumentLibraryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "docs_dir": str(settings.docs_dir),
+        "files": [
+            {
+                "id": document.id,
+                "name": document.name,
+                "size_bytes": document.size_bytes,
+                "document_type": document.document_type,
+            }
+            for document in documents
+        ],
+    }
+
+
+@app.post("/api/docs/files")
+async def upload_docs_files(files: list[UploadFile] = File(...)) -> dict[str, Any]:
+    pending_uploads: list[tuple[str | None, bytes]] = []
+    for file in files:
+        file_bytes = await file.read()
+        try:
+            validate_library_upload(filename=file.filename, file_bytes=file_bytes)
+        except DocumentLibraryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        pending_uploads.append((file.filename, file_bytes))
+
+    if not pending_uploads:
+        raise HTTPException(status_code=400, detail="Select at least one file to upload.")
+
+    try:
+        documents = [
+            save_library_upload(
+                docs_dir=settings.docs_dir,
+                filename=filename,
+                file_bytes=file_bytes,
+            )
+            for filename, file_bytes in pending_uploads
+        ]
     except DocumentLibraryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

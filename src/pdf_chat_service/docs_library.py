@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from pdf_chat_service.document import extract_document_text
 from pdf_chat_service.image import (
@@ -17,6 +18,7 @@ SUPPORTED_DOCUMENT_SUFFIXES = {
     ".markdown": "markdown",
     **{suffix: "image" for suffix in IMAGE_SUFFIXES},
 }
+UPLOAD_FILENAME_PATTERN = re.compile(r"[^A-Za-z0-9._ -]+")
 
 ANSWER_WITH_SOURCE_SENTENCE_INSTRUCTION = """Answer only from the selected files.
 Always return the answer together with the exact source sentence from the files that supports it.
@@ -79,6 +81,35 @@ def list_library_documents(docs_dir: Path) -> list[LibraryDocument]:
     return documents
 
 
+def validate_library_upload(*, filename: str | None, file_bytes: bytes) -> str:
+    clean_name = normalize_upload_filename(filename)
+    if not file_bytes:
+        raise DocumentLibraryError("Uploaded file is empty.")
+    if SUPPORTED_DOCUMENT_SUFFIXES.get(Path(clean_name).suffix.lower()) is None:
+        raise DocumentLibraryError("Only PDF, Markdown, and image files are supported.")
+    return clean_name
+
+
+def save_library_upload(*, docs_dir: Path, filename: str | None, file_bytes: bytes) -> LibraryDocument:
+    clean_name = validate_library_upload(filename=filename, file_bytes=file_bytes)
+    root = docs_dir.resolve()
+    if root.exists() and not root.is_dir():
+        raise DocumentLibraryError(f"Docs path is not a folder: {docs_dir}")
+
+    root.mkdir(parents=True, exist_ok=True)
+    target_path = unique_upload_path(root=root, filename=clean_name)
+    target_path.write_bytes(file_bytes)
+
+    document_type = SUPPORTED_DOCUMENT_SUFFIXES[target_path.suffix.lower()]
+    return LibraryDocument(
+        id=target_path.relative_to(root).as_posix(),
+        name=target_path.name,
+        path=target_path,
+        size_bytes=target_path.stat().st_size,
+        document_type=document_type,
+    )
+
+
 def extract_library_document(
     *,
     docs_dir: Path,
@@ -106,6 +137,31 @@ def extract_library_document(
         document_type=document_type,
         text=text,
     )
+
+
+def normalize_upload_filename(filename: str | None) -> str:
+    raw_name = Path((filename or "").replace("\\", "/")).name.strip()
+    clean_name = UPLOAD_FILENAME_PATTERN.sub("_", raw_name)
+    clean_name = re.sub(r"\s+", " ", clean_name).strip()
+    clean_name = clean_name.strip(".")
+    if not clean_name:
+        raise DocumentLibraryError("Uploaded file must have a filename.")
+    return clean_name
+
+
+def unique_upload_path(*, root: Path, filename: str) -> Path:
+    target_path = root / filename
+    if not target_path.exists():
+        return target_path
+
+    suffix = target_path.suffix
+    stem = target_path.stem or "document"
+    for counter in range(1, 10_000):
+        candidate = root / f"{stem}-{counter}{suffix}"
+        if not candidate.exists():
+            return candidate
+
+    raise DocumentLibraryError("Could not choose a unique filename for the uploaded file.")
 
 
 def resolve_library_document(*, docs_dir: Path, document_id: str) -> LibraryDocument:

@@ -140,8 +140,9 @@ in `./response`. The API response includes the generated path:
 
 ## React Docs App
 
-The React app lists PDF, Markdown, and image files from `./docs`, lets you select files
-with checkboxes, and sends the selected text plus your question to the model.
+The React app lists PDF, Markdown, and image files from `./docs`, lets you add files
+into that folder, select files with checkboxes, and send the selected text plus your
+question to the model.
 
 Start both together:
 
@@ -173,6 +174,7 @@ The app calls these API routes:
 
 ```text
 GET  /api/docs/files
+POST /api/docs/files
 POST /api/docs/chat
 ```
 
