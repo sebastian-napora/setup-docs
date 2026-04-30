@@ -5,13 +5,20 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
 VENV_DIR="${ROOT_DIR}/.venv"
 
+if [ -f "${ROOT_DIR}/.env" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "${ROOT_DIR}/.env"
+  set +a
+fi
+
 APP_HOST="${APP_HOST:-0.0.0.0}"
 APP_PORT="${APP_PORT:-8080}"
 FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 BACKEND_RELOAD="${BACKEND_RELOAD:-0}"
 FORCE_INSTALL="${FORCE_INSTALL:-0}"
-MODEL_URL="${CHAT_COMPLETIONS_URL:-http://192.168.0.80:11112/v1/chat/completions}"
+MODEL_URL="${CHAT_COMPLETIONS_URL:-http://0.0.0.0:11112/v1/chat/completions}"
 
 BACKEND_PID=""
 FRONTEND_PID=""
@@ -70,7 +77,7 @@ ensure_backend_dependencies() {
     python3 -m venv "${VENV_DIR}"
   fi
 
-  if [ "${FORCE_INSTALL}" = "1" ] || [ ! -f "${VENV_DIR}/.pdf_chat_installed" ]; then
+  if [ "${FORCE_INSTALL}" = "1" ] || [ ! -f "${VENV_DIR}/.pdf_chat_installed" ] || [ "${ROOT_DIR}/pyproject.toml" -nt "${VENV_DIR}/.pdf_chat_installed" ]; then
     echo "Installing Python dependencies..."
     "${VENV_DIR}/bin/python" -m pip install --upgrade pip
     "${VENV_DIR}/bin/python" -m pip install -e ".[dev]"

@@ -1,12 +1,14 @@
 # Document Chat Completions
 
-Small Python service that accepts a PDF or Markdown file and sends its text as the
-`messages[0].content` field to a local OpenAI-compatible chat completions endpoint.
+Small Python service that accepts PDF, Markdown, or image files and sends extracted text
+as the `messages[0].content` field to a local OpenAI-compatible chat completions endpoint.
 
-Default target:
+Default server endpoints:
 
 ```text
-http://192.168.0.80:11112/v1/chat/completions
+Chat API:  http://0.0.0.0:11112/v1/chat/completions
+Image API: http://0.0.0.0:11112/v1/chat/image
+Compress:  http://0.0.0.0:11112/compress
 ```
 
 Default model:
@@ -26,6 +28,9 @@ source .venv/bin/activate
 The setup script checks Python 3.10+, creates `.venv`, installs editable developer
 dependencies, creates `.env` from `.env.example` when missing, and prepares the
 `docs` and `response` folders.
+
+Image support uses the dedicated image analysis endpoint configured by `IMAGE_CHAT_URL`.
+That endpoint must be backed by a model/server that accepts image inputs.
 
 ## Run The Service
 
@@ -81,7 +86,7 @@ You can also let the script build the frontend first:
 BUILD_FRONTEND=1 ./run_dist.sh
 ```
 
-Upload a PDF or Markdown file and send it to the model:
+Upload a PDF, Markdown, or image file and send it to the model:
 
 ```bash
 curl -X POST "http://localhost:8080/file/chat" \
@@ -99,8 +104,17 @@ curl -X POST "http://localhost:8080/file/chat" \
   -F "stream=false"
 ```
 
-The service extracts PDF text, or reads Markdown text directly, and sends this body to
-the model endpoint:
+For images:
+
+```bash
+curl -X POST "http://localhost:8080/file/chat" \
+  -F "file=@/path/to/image.png" \
+  -F "prompt_prefix=Read this image and summarize the important facts:" \
+  -F "stream=false"
+```
+
+The service extracts PDF text, reads Markdown text directly, or asks the image endpoint
+to analyze image files, then sends this body to the model endpoint:
 
 ```json
 {
@@ -126,8 +140,8 @@ in `./response`. The API response includes the generated path:
 
 ## React Docs App
 
-The React app lists PDF and Markdown files from `./docs`, lets you select files with
-checkboxes, and sends the selected text plus your question to the model.
+The React app lists PDF, Markdown, and image files from `./docs`, lets you select files
+with checkboxes, and sends the selected text plus your question to the model.
 
 Start both together:
 
@@ -190,7 +204,7 @@ pdf-chat /path/to/file.md --prompt-prefix "Tell me what this document says:"
 
 ## Load Files From `./docs`
 
-Put PDF or Markdown files in `./docs`, start the service, then run:
+Put PDF, Markdown, or image files in `./docs`, start the service, then run:
 
 ```bash
 ./load_docs.sh
@@ -222,16 +236,22 @@ MODEL="RedHatAI/Qwen3.6-35B-A3B-NVFP4" ./load_docs.sh
 Environment variables:
 
 ```bash
-export CHAT_COMPLETIONS_URL="http://192.168.0.80:11112/v1/chat/completions"
+export CHAT_COMPLETIONS_URL="http://0.0.0.0:11112/v1/chat/completions"
 export CHAT_MODEL="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
 export REQUEST_TIMEOUT_SECONDS="120"
 export MAX_PDF_CHARS="120000"
+export IMAGE_CHAT_URL="http://0.0.0.0:11112/v1/chat/image"
+export IMAGE_CHAT_THINKING="false"
+export COMPRESS_URL="http://0.0.0.0:11112/compress"
 export DOCS_DIR="docs"
 export RESPONSE_DIR="response"
 ```
 
 `MAX_PDF_CHARS` prevents accidentally sending an extremely large prompt. Set it to `0`
 to disable truncation.
+
+`IMAGE_CHAT_URL` is called with multipart field `image`, plus optional `prompt` and
+`thinking`, before the final document question is sent to the chat completions endpoint.
 
 ## Test
 

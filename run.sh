@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -f "${ROOT_DIR}/.env" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "${ROOT_DIR}/.env"
+  set +a
+fi
+
 APP_HOST="${APP_HOST:-0.0.0.0}"
 APP_PORT="${APP_PORT:-8080}"
-MODEL_URL="${CHAT_COMPLETIONS_URL:-http://192.168.0.80:11112/v1/chat/completions}"
+MODEL_URL="${CHAT_COMPLETIONS_URL:-http://0.0.0.0:11112/v1/chat/completions}"
 VENV_DIR=".venv"
 
 cat <<INFO

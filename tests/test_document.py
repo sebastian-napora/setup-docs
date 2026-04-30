@@ -27,8 +27,47 @@ def test_extract_markdown_document_text_with_octet_stream_content_type() -> None
     assert document_type == "markdown"
 
 
+def test_extract_image_document_text_uses_image_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_extract_image_text(
+        *,
+        image_bytes: bytes,
+        filename: str | None,
+        content_type: str | None,
+        max_chars: int,
+        image_chat_url: str,
+        image_chat_prompt: str,
+        image_chat_thinking: bool,
+        timeout_seconds: float,
+    ) -> str:
+        assert image_bytes == b"image bytes"
+        assert filename == "scan.png"
+        assert content_type == "image/png"
+        assert max_chars == 500
+        assert image_chat_url == "http://image.test/analyze"
+        assert image_chat_prompt == "Read image"
+        assert image_chat_thinking is True
+        assert timeout_seconds == 10
+        return "Text from image"
+
+    monkeypatch.setattr("pdf_chat_service.document.extract_image_text", fake_extract_image_text)
+
+    text, document_type = extract_document_text(
+        file_bytes=b"image bytes",
+        filename="scan.png",
+        content_type="image/png",
+        max_chars=500,
+        image_chat_url="http://image.test/analyze",
+        image_chat_prompt="Read image",
+        image_chat_thinking=True,
+        timeout_seconds=10,
+    )
+
+    assert text == "Text from image"
+    assert document_type == "image"
+
+
 def test_extract_document_rejects_unsupported_file() -> None:
-    with pytest.raises(DocumentExtractionError, match="PDF or Markdown"):
+    with pytest.raises(DocumentExtractionError, match="PDF, Markdown, or image"):
         extract_document_text(
             file_bytes=b"hello",
             filename="notes.txt",

@@ -113,6 +113,10 @@ async def chat_with_docs(request: DocsChatRequest) -> dict[str, Any]:
                 docs_dir=settings.docs_dir,
                 document_id=document_id,
                 max_chars=settings.max_pdf_chars,
+                image_chat_url=settings.image_chat_url,
+                image_chat_prompt=settings.image_chat_prompt,
+                image_chat_thinking=settings.image_chat_thinking,
+                timeout_seconds=settings.request_timeout_seconds,
             )
             for document_id in document_ids
         ]
@@ -202,6 +206,10 @@ async def chat_with_document(
             filename=file.filename,
             content_type=file.content_type,
             max_chars=settings.max_pdf_chars,
+            image_chat_url=settings.image_chat_url,
+            image_chat_prompt=settings.image_chat_prompt,
+            image_chat_thinking=settings.image_chat_thinking,
+            timeout_seconds=settings.request_timeout_seconds,
         )
     except DocumentExtractionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

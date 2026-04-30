@@ -28,13 +28,24 @@ else
   while IFS= read -r -d '' file; do
     files+=("${file}")
   done < <(
-    find "${DOCS_DIR}" -type f \( -iname '*.pdf' -o -iname '*.md' -o -iname '*.markdown' \) -print0 \
+    find "${DOCS_DIR}" -type f \( \
+      -iname '*.pdf' \
+      -o -iname '*.md' \
+      -o -iname '*.markdown' \
+      -o -iname '*.png' \
+      -o -iname '*.jpg' \
+      -o -iname '*.jpeg' \
+      -o -iname '*.webp' \
+      -o -iname '*.bmp' \
+      -o -iname '*.tif' \
+      -o -iname '*.tiff' \
+    \) -print0 \
       | sort -z
   )
 fi
 
 if [ "${#files[@]}" -eq 0 ]; then
-  echo "No PDF or Markdown files found in ${DOCS_DIR}" >&2
+  echo "No PDF, Markdown, or image files found in ${DOCS_DIR}" >&2
   exit 1
 fi
 

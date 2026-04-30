@@ -4,16 +4,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pdf_chat_service.document import extract_document_text
+from pdf_chat_service.image import (
+    DEFAULT_IMAGE_CHAT_PROMPT,
+    DEFAULT_IMAGE_CHAT_URL,
+    IMAGE_SUFFIXES,
+)
 
 
 SUPPORTED_DOCUMENT_SUFFIXES = {
     ".pdf": "pdf",
     ".md": "markdown",
     ".markdown": "markdown",
+    **{suffix: "image" for suffix in IMAGE_SUFFIXES},
 }
 
 ANSWER_WITH_SOURCE_SENTENCE_INSTRUCTION = """Answer only from the selected files.
 Always return the answer together with the exact source sentence from the files that supports it.
+For image files, the available source text is the image analysis returned by the image model.
 Use plain text only, without XML or HTML tags.
 For simple fact questions, use this shape:
 Answer: the answer
@@ -77,6 +84,10 @@ def extract_library_document(
     docs_dir: Path,
     document_id: str,
     max_chars: int,
+    image_chat_url: str = DEFAULT_IMAGE_CHAT_URL,
+    image_chat_prompt: str = DEFAULT_IMAGE_CHAT_PROMPT,
+    image_chat_thinking: bool = False,
+    timeout_seconds: float = 120.0,
 ) -> ExtractedLibraryDocument:
     document = resolve_library_document(docs_dir=docs_dir, document_id=document_id)
     text, document_type = extract_document_text(
@@ -84,6 +95,10 @@ def extract_library_document(
         filename=document.path.name,
         content_type=None,
         max_chars=max_chars,
+        image_chat_url=image_chat_url,
+        image_chat_prompt=image_chat_prompt,
+        image_chat_thinking=image_chat_thinking,
+        timeout_seconds=timeout_seconds,
     )
     return ExtractedLibraryDocument(
         id=document.id,
@@ -111,7 +126,7 @@ def resolve_library_document(*, docs_dir: Path, document_id: str) -> LibraryDocu
 
     document_type = SUPPORTED_DOCUMENT_SUFFIXES.get(candidate.suffix.lower())
     if document_type is None:
-        raise DocumentLibraryError("Only PDF and Markdown files are supported.")
+        raise DocumentLibraryError("Only PDF, Markdown, and image files are supported.")
     if not candidate.is_file():
         raise DocumentLibraryError(f"Document was not found: {document_id}")
 

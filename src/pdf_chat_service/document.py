@@ -1,5 +1,13 @@
 from pathlib import Path
 
+from pdf_chat_service.image import (
+    DEFAULT_IMAGE_CHAT_PROMPT,
+    DEFAULT_IMAGE_CHAT_URL,
+    IMAGE_CONTENT_TYPES,
+    IMAGE_SUFFIXES,
+    ImageExtractionError,
+    extract_image_text,
+)
 from pdf_chat_service.pdf import PdfExtractionError, extract_pdf_text
 
 
@@ -13,22 +21,43 @@ def extract_document_text(
     filename: str | None,
     content_type: str | None,
     max_chars: int,
+    image_chat_url: str = DEFAULT_IMAGE_CHAT_URL,
+    image_chat_prompt: str = DEFAULT_IMAGE_CHAT_PROMPT,
+    image_chat_thinking: bool = False,
+    timeout_seconds: float = 120.0,
 ) -> tuple[str, str]:
     suffix = Path(filename or "").suffix.lower()
+    normalized_content_type = (content_type or "").split(";", maxsplit=1)[0].strip().lower()
 
-    if content_type == "application/pdf" or suffix == ".pdf":
+    if normalized_content_type == "application/pdf" or suffix == ".pdf":
         try:
             return extract_pdf_text(file_bytes, max_chars=max_chars), "pdf"
         except PdfExtractionError as exc:
             raise DocumentExtractionError(str(exc)) from exc
 
-    if content_type in {None, "application/octet-stream", "text/markdown", "text/plain"} and suffix in {
-        ".md",
-        ".markdown",
-    }:
+    markdown_content_types = {"", "application/octet-stream", "text/markdown", "text/plain"}
+    if normalized_content_type in markdown_content_types and suffix in {".md", ".markdown"}:
         return extract_markdown_text(file_bytes, max_chars=max_chars), "markdown"
 
-    raise DocumentExtractionError("Upload must be a PDF or Markdown file.")
+    if normalized_content_type in IMAGE_CONTENT_TYPES or suffix in IMAGE_SUFFIXES:
+        try:
+            return (
+                extract_image_text(
+                    image_bytes=file_bytes,
+                    filename=filename,
+                    content_type=normalized_content_type,
+                    max_chars=max_chars,
+                    image_chat_url=image_chat_url,
+                    image_chat_prompt=image_chat_prompt,
+                    image_chat_thinking=image_chat_thinking,
+                    timeout_seconds=timeout_seconds,
+                ),
+                "image",
+            )
+        except ImageExtractionError as exc:
+            raise DocumentExtractionError(str(exc)) from exc
+
+    raise DocumentExtractionError("Upload must be a PDF, Markdown, or image file.")
 
 
 def extract_markdown_text(markdown_bytes: bytes, max_chars: int) -> str:

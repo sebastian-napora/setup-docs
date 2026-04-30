@@ -16,12 +16,13 @@ def test_list_library_documents_returns_supported_files(tmp_path: Path) -> None:
     docs_dir.mkdir()
     (docs_dir / "notes.md").write_text("# Notes", encoding="utf-8")
     (docs_dir / "invite.pdf").write_bytes(b"%PDF")
+    (docs_dir / "scan.png").write_bytes(b"image")
     (docs_dir / "ignored.txt").write_text("Nope", encoding="utf-8")
 
     documents = list_library_documents(docs_dir)
 
-    assert [document.id for document in documents] == ["invite.pdf", "notes.md"]
-    assert [document.document_type for document in documents] == ["pdf", "markdown"]
+    assert [document.id for document in documents] == ["invite.pdf", "notes.md", "scan.png"]
+    assert [document.document_type for document in documents] == ["pdf", "markdown", "image"]
 
 
 def test_resolve_library_document_rejects_path_traversal(tmp_path: Path) -> None:
@@ -47,6 +48,7 @@ def test_build_docs_chat_prompt_requires_source_sentence_answer() -> None:
     )
 
     assert "exact source sentence" in prompt
+    assert "image analysis returned by the image model" in prompt
     assert "without XML or HTML tags" in prompt
     assert 'Quote: "exact sentence from the file"' in prompt
     assert "<answer>" not in prompt
