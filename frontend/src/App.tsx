@@ -2,6 +2,7 @@ import {
   CheckSquare,
   FileText,
   History as HistoryIcon,
+  Image as ImageIcon,
   Languages,
   Loader2,
   RefreshCw,
@@ -158,7 +159,7 @@ const TRANSLATIONS: Record<Language, Translations> = {
     clear: 'Wyczyść',
     searchFiles: 'Szukaj plików',
     loadingFiles: 'Ładowanie plików',
-    noDocsFiles: 'Brak plików PDF lub Markdown',
+    noDocsFiles: 'Brak plików PDF, Markdown lub obrazów',
     questionHeading: 'Pytanie',
     filesInContext: (count) => `${pluralFilesPl(count)} w kontekście`,
     promptPlaceholder: 'np. data urodzin córki',
@@ -208,7 +209,7 @@ const TRANSLATIONS: Record<Language, Translations> = {
     clear: 'Clear',
     searchFiles: 'Search files',
     loadingFiles: 'Loading files',
-    noDocsFiles: 'No PDF or Markdown files',
+    noDocsFiles: 'No PDF, Markdown, or image files',
     questionHeading: 'Question',
     filesInContext: (count) => `${count} files in context`,
     promptPlaceholder: 'e.g. daughter birth date',
@@ -598,11 +599,12 @@ function App() {
                   checked={selectedIds.has(document.id)}
                   onChange={() => toggleDocument(document.id)}
                 />
-                <FileText size={19} aria-hidden="true" />
+                <DocumentTypeIcon documentType={document.document_type} />
                 <span className="file-copy">
                   <strong>{document.name}</strong>
                   <span>
-                    {document.id} - {document.document_type} - {formatBytes(document.size_bytes)}
+                    {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
+                    {formatBytes(document.size_bytes)}
                   </span>
                 </span>
               </label>
@@ -751,6 +753,28 @@ function StatusLine({ icon, text }: { icon: ReactNode; text: string }) {
       <span>{text}</span>
     </div>
   )
+}
+
+function DocumentTypeIcon({ documentType }: { documentType: string }) {
+  if (documentType === 'image') {
+    return <ImageIcon size={19} aria-hidden="true" />
+  }
+
+  return <FileText size={19} aria-hidden="true" />
+}
+
+function formatDocumentType(documentType: string, language: Language) {
+  if (documentType === 'pdf') {
+    return 'PDF'
+  }
+  if (documentType === 'markdown') {
+    return 'Markdown'
+  }
+  if (documentType === 'image') {
+    return language === 'pl' ? 'obraz' : 'image'
+  }
+
+  return documentType
 }
 
 function formatBytes(bytes: number) {
