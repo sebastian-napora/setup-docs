@@ -4,9 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.egg-info/
-dist/
 build/
 node_modules/
-frontend/dist/
 docs/
 response/
