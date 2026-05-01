@@ -7,5 +7,6 @@ __pycache__/
 build/
 node_modules/
 docs/
+docs_archive/
 embeddings/
 response/

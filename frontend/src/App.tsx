@@ -891,9 +891,11 @@ function App() {
   async function submitDocsQuestion(mode: RequestMode) {
     const selectedFiles = [...selectedIds]
     const files =
-      mode !== 'chat' && selectedFiles.length === 0
-        ? documents.map((document) => document.id)
-        : selectedFiles
+      mode === 'embedding_search'
+        ? []
+        : mode === 'source_search' && selectedFiles.length === 0
+          ? documents.map((document) => document.id)
+          : selectedFiles
 
     if (!prompt.trim() || (mode === 'chat' && !files.length) || isAsking) {
       return

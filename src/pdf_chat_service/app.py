@@ -19,6 +19,7 @@ from pdf_chat_service.docs_library import (
     archive_library_document,
     build_docs_chat_prompt,
     build_docs_source_search_prompt,
+    clear_archived_library,
     delete_archived_library_document,
     extract_library_document,
     list_library_documents,
