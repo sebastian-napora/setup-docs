@@ -186,6 +186,51 @@ def save_library_upload(*, docs_dir: Path, filename: str | None, file_bytes: byt
     )
 
 
+FOLDER_NAME_PATTERN = re.compile(r"[^A-Za-z0-9._ -]+")
+
+
+def move_library_document(
+    *,
+    docs_dir: Path,
+    document_id: str,
+    folder_name: str,
+) -> LibraryDocument:
+    document = resolve_library_document(docs_dir=docs_dir, document_id=document_id)
+    root = docs_dir.resolve()
+
+    if folder_name:
+        clean_folder = FOLDER_NAME_PATTERN.sub("_", folder_name).strip().strip(".")
+        if not clean_folder:
+            raise DocumentLibraryError("Invalid folder name.")
+        target_dir = (root / clean_folder).resolve()
+        try:
+            target_dir.relative_to(root)
+        except ValueError as exc:
+            raise DocumentLibraryError("Folder must stay inside the docs directory.") from exc
+    else:
+        target_dir = root
+
+    target_path = (target_dir / document.path.name).resolve()
+
+    if target_path == document.path.resolve():
+        return document
+    if target_path.exists():
+        raise DocumentLibraryError("A file with this name already exists in the target folder.")
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(document.path), str(target_path))
+    remove_empty_parent_directories(start=document.path.parent, stop=root)
+
+    document_type = SUPPORTED_DOCUMENT_SUFFIXES[target_path.suffix.lower()]
+    return LibraryDocument(
+        id=target_path.relative_to(root).as_posix(),
+        name=target_path.name,
+        path=target_path,
+        size_bytes=target_path.stat().st_size,
+        document_type=document_type,
+    )
+
+
 def archive_library_document(
     *,
     docs_dir: Path,

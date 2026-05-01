@@ -20,6 +20,8 @@ fi
 
 APP_HOST="${APP_HOST:-0.0.0.0}"
 APP_PORT="${APP_PORT:-8080}"
+APP_SSL_CERT="${APP_SSL_CERT:-}"
+APP_SSL_KEY="${APP_SSL_KEY:-}"
 BUILD_FRONTEND="${BUILD_FRONTEND:-0}"
 FORCE_INSTALL="${FORCE_INSTALL:-0}"
 MODEL_PORT="${MODEL_PORT:-11112}"
@@ -154,6 +156,11 @@ ERROR
 choose_model_endpoint
 MODEL_URL="${CHAT_COMPLETIONS_URL:-http://0.0.0.0:${MODEL_PORT}/v1/chat/completions}"
 
+APP_SCHEME="http"
+if [ -n "${APP_SSL_CERT}" ] && [ -n "${APP_SSL_KEY}" ]; then
+  APP_SCHEME="https"
+fi
+
 cat <<INFO
 PDF Chat Completions
 ====================
@@ -164,7 +171,7 @@ Model endpoint:
   ${MODEL_URL}
 
 App:
-  http://localhost:${APP_PORT}
+  ${APP_SCHEME}://localhost:${APP_PORT}
 
 Static files:
   ${DIST_DIR}
@@ -172,6 +179,10 @@ Static files:
 Endpoint choice shortcuts:
   MODEL_ENDPOINT=local ./run_dist.sh
   MODEL_ENDPOINT=remote ./run_dist.sh
+
+HTTPS via Tailscale (enables microphone recording):
+  tailscale cert aitopatom-4fc6.tailca9a17.ts.net
+  APP_SSL_CERT=aitopatom-4fc6.tailca9a17.ts.net.crt APP_SSL_KEY=aitopatom-4fc6.tailca9a17.ts.net.key ./run_dist.sh
 
 Press Ctrl+C to stop the server.
 
@@ -181,4 +192,14 @@ require_free_port "${APP_PORT}"
 ensure_backend_dependencies
 ensure_frontend_dist
 
-exec "${VENV_DIR}/bin/uvicorn" pdf_chat_service.app:app --host "${APP_HOST}" --port "${APP_PORT}"
+uvicorn_args=(
+  pdf_chat_service.app:app
+  --host "${APP_HOST}"
+  --port "${APP_PORT}"
+)
+
+if [ -n "${APP_SSL_CERT}" ] && [ -n "${APP_SSL_KEY}" ]; then
+  uvicorn_args+=(--ssl-certfile "${APP_SSL_CERT}" --ssl-keyfile "${APP_SSL_KEY}")
+fi
+
+exec "${VENV_DIR}/bin/uvicorn" "${uvicorn_args[@]}"

@@ -23,6 +23,7 @@ from pdf_chat_service.docs_library import (
     delete_archived_library_document,
     extract_library_document,
     list_library_documents,
+    move_library_document,
     rename_library_document,
     resolve_library_document,
     save_library_upload,
@@ -73,6 +74,10 @@ class DeleteArchivedDocumentRequest(BaseModel):
 
 class RenameDocumentRequest(BaseModel):
     name: str = Field(..., min_length=1)
+
+
+class MoveDocumentRequest(BaseModel):
+    folder: str = Field(default="")
 
 
 class DocsSourceSearchRequest(BaseModel):
@@ -201,6 +206,20 @@ async def archive_docs_file(document_id: str) -> dict[str, Any]:
             docs_dir=settings.docs_dir,
             archive_dir=settings.docs_archive_dir,
             document_id=document_id,
+        )
+    except DocumentLibraryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"file": library_document_payload(document)}
+
+
+@app.post("/api/docs/files/{document_id:path}/move")
+async def move_docs_file(document_id: str, request: MoveDocumentRequest) -> dict[str, Any]:
+    try:
+        document = move_library_document(
+            docs_dir=settings.docs_dir,
+            document_id=document_id,
+            folder_name=request.folder,
         )
     except DocumentLibraryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

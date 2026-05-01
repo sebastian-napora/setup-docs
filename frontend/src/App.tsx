@@ -1,14 +1,18 @@
 import {
+  ArrowRightFromLine,
   CircleCheck,
   CircleX,
   CheckSquare,
   ChevronDown,
   ChevronRight,
   FileText,
+  FolderPlus,
   History as HistoryIcon,
   Image as ImageIcon,
   Languages,
   Loader2,
+  Mic,
+  MicOff,
   Pencil,
   RefreshCw,
   Search,
@@ -100,6 +104,12 @@ type DocsChatResponse = {
 }
 
 type ApiDetail = string | { message?: string; response?: string }
+
+type DocList = {
+  id: string
+  name: string
+  folder: string
+}
 
 type DocsHistoryItem = {
   id: string
@@ -229,11 +239,28 @@ type Translations = {
   imagesTab: string
   noTextFiles: string
   noImageFiles: string
+  micUnavailable: string
+  startRecording: string
+  stopRecording: string
+  transcriptionError: string
+  newList: string
+  collapseAllLists: string
+  expandAllLists: string
+  moveFileTitle: string
+  moveFileAria: string
+  moveFileModalTitle: string
+  moveFileModalText: (filename: string) => string
+  listNamePlaceholder: string
+  createList: string
+  cancelCreateList: string
+  cancelCreateListAria: string
+  emptyList: string
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 const LANGUAGE_STORAGE_KEY = 'docs-chat-language'
 const DOCUMENT_UPLOAD_ACCEPT = '.pdf,.md,.markdown,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff'
+const DODANE_LIST_ID = 'dodane'
 
 const TRANSLATIONS: Record<Language, Translations> = {
   pl: {
@@ -333,6 +360,22 @@ const TRANSLATIONS: Record<Language, Translations> = {
     searchSourcesError: 'Nie udało się znaleźć źródeł.',
     searchEmbeddingsError: 'Nie udało się wyszukać przez embeddingi.',
     unexpectedError: 'Wystąpił nieoczekiwany błąd.',
+    startRecording: 'Nagraj pytanie',
+    stopRecording: 'Zatrzymaj nagrywanie',
+    transcriptionError: 'Nie udało się transkrybować nagrania.',
+    micUnavailable: 'Nagrywanie wymaga HTTPS lub localhost.',
+    newList: 'Nowa lista',
+    collapseAllLists: 'Zwiń wszystkie',
+    expandAllLists: 'Rozwiń wszystkie',
+    moveFileTitle: 'Przenieś do listy',
+    moveFileAria: 'Przenieś plik do listy',
+    moveFileModalTitle: 'Przenieś plik',
+    moveFileModalText: (filename) => `Przenieś "${filename}" do listy`,
+    listNamePlaceholder: 'Nazwa listy',
+    createList: 'Utwórz',
+    cancelCreateList: 'Anuluj',
+    cancelCreateListAria: 'Anuluj tworzenie listy',
+    emptyList: 'Lista jest pusta',
   },
   en: {
     appEyebrow: 'docs folder',
@@ -431,11 +474,29 @@ const TRANSLATIONS: Record<Language, Translations> = {
     searchSourcesError: 'Could not find sources.',
     searchEmbeddingsError: 'Could not search embeddings.',
     unexpectedError: 'Unexpected error.',
+    startRecording: 'Record question',
+    stopRecording: 'Stop recording',
+    transcriptionError: 'Could not transcribe recording.',
+    micUnavailable: 'Recording requires HTTPS or localhost.',
+    newList: 'New list',
+    collapseAllLists: 'Collapse all',
+    expandAllLists: 'Expand all',
+    moveFileTitle: 'Move to list',
+    moveFileAria: 'Move file to list',
+    moveFileModalTitle: 'Move file',
+    moveFileModalText: (filename) => `Move "${filename}" to list`,
+    listNamePlaceholder: 'List name',
+    createList: 'Create',
+    cancelCreateList: 'Cancel',
+    cancelCreateListAria: 'Cancel list creation',
+    emptyList: 'List is empty',
   },
 }
 
 function App() {
   const uploadInputRef = useRef<HTMLInputElement | null>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
   const [language, setLanguage] = useState<Language>(getInitialLanguage)
   const [documents, setDocuments] = useState<DocsFile[]>([])
   const [archivedDocuments, setArchivedDocuments] = useState<DocsFile[]>([])
@@ -455,6 +516,8 @@ function App() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(true)
   const [activeRequestMode, setActiveRequestMode] = useState<RequestMode | null>(null)
   const [isUploading, setIsUploading] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
   const [archivingId, setArchivingId] = useState<string | null>(null)
   const [editingDocumentId, setEditingDocumentId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -466,6 +529,13 @@ function App() {
   const [isAnswerExpanded, setIsAnswerExpanded] = useState(true)
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(true)
   const [fileListTab, setFileListTab] = useState<'text' | 'images'>('text')
+  const [extraLists, setExtraLists] = useState<DocList[]>([])
+  const [moveCandidate, setMoveCandidate] = useState<DocsFile | null>(null)
+  const [isMoveLoading, setIsMoveLoading] = useState(false)
+  const [moveError, setMoveError] = useState('')
+  const [isCreatingList, setIsCreatingList] = useState(false)
+  const [newListName, setNewListName] = useState('')
+  const [collapsedListIds, setCollapsedListIds] = useState<string[]>([])
   const t = TRANSLATIONS[language]
   const isAsking = activeRequestMode !== null
 
@@ -538,6 +608,25 @@ function App() {
     () => documents.filter((d) => d.document_type === 'image'),
     [documents],
   )
+
+  // Derive lists from actual folder structure of text files + ephemeral newly-created lists
+  const docLists = useMemo<DocList[]>(() => {
+    const folders = new Set<string>()
+    textDocuments.forEach((doc) => {
+      const slashIdx = doc.id.lastIndexOf('/')
+      if (slashIdx !== -1) {
+        folders.add(doc.id.slice(0, slashIdx))
+      }
+    })
+    const fromFiles: DocList[] = [...folders].sort().map((folder) => ({
+      id: folder,
+      name: folder,
+      folder,
+    }))
+    const extra = extraLists.filter((l) => l.folder !== '' && !folders.has(l.folder))
+    return [{ id: DODANE_LIST_ID, name: 'Dodane', folder: '' }, ...fromFiles, ...extra]
+  }, [textDocuments, extraLists])
+
   const filteredDocuments = useMemo(() => {
     const source = fileListTab === 'images' ? imageDocuments : textDocuments
     const normalizedQuery = query.trim().toLowerCase()
@@ -551,6 +640,26 @@ function App() {
         .includes(normalizedQuery),
     )
   }, [fileListTab, imageDocuments, textDocuments, query])
+
+  const filteredTextDocsByList = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase()
+    const result: Record<string, DocsFile[]> = {}
+    docLists.forEach((list) => {
+      const listDocs = textDocuments.filter((doc) => {
+        const slashIdx = doc.id.lastIndexOf('/')
+        const folder = slashIdx === -1 ? '' : doc.id.slice(0, slashIdx)
+        const matchedList = docLists.find((l) => l.folder === folder)
+        const effectiveListId = matchedList ? matchedList.id : DODANE_LIST_ID
+        return effectiveListId === list.id
+      })
+      result[list.id] = normalizedQuery
+        ? listDocs.filter((doc) =>
+            `${doc.name} ${doc.id} ${doc.document_type}`.toLowerCase().includes(normalizedQuery),
+          )
+        : listDocs
+    })
+    return result
+  }, [textDocuments, docLists, query])
 
   const selectedDocuments = useMemo(
     () => documents.filter((document) => selectedIds.has(document.id)),
@@ -1060,6 +1169,149 @@ function App() {
     }
   }
 
+  async function transcribeAudio(audioBlob: Blob) {
+    setIsTranscribing(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', audioBlob, 'recording.webm')
+      formData.append('model', 'whisper-1')
+      const response = await fetch(`${API_BASE_URL}/v1/audio/transcriptions`, {
+        method: 'POST',
+        body: formData,
+      })
+      if (!response.ok) {
+        throw new Error(t.transcriptionError)
+      }
+      const data = (await response.json()) as { text?: string }
+      const text = data.text?.trim() ?? ''
+      if (text) {
+        setPrompt((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))
+      }
+    } catch (transcribeError) {
+      setError(errorMessage(transcribeError, t.unexpectedError))
+    } finally {
+      setIsTranscribing(false)
+    }
+  }
+
+  async function toggleRecording() {
+    if (isRecording) {
+      mediaRecorderRef.current?.stop()
+      setIsRecording(false)
+    } else {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error(t.micUnavailable)
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        const mediaRecorder = new MediaRecorder(stream)
+        mediaRecorderRef.current = mediaRecorder
+        audioChunksRef.current = []
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunksRef.current.push(event.data)
+          }
+        }
+        mediaRecorder.onstop = () => {
+          stream.getTracks().forEach((track) => track.stop())
+          const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+          void transcribeAudio(blob)
+        }
+        mediaRecorder.start()
+        setIsRecording(true)
+      } catch (recordError) {
+        setError(errorMessage(recordError, t.unexpectedError))
+      }
+    }
+  }
+
+  function createNewList(name: string) {
+    const trimmedName = name.trim()
+    if (!trimmedName) return
+    const folder = trimmedName
+    // Only add if not already derived from files
+    setExtraLists((current) => {
+      if (current.find((l) => l.folder === folder)) return current
+      const id = typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `list-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      return [...current, { id, name: trimmedName, folder }]
+    })
+    setIsCreatingList(false)
+    setNewListName('')
+  }
+
+  function handleNewListKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      createNewList(newListName)
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setIsCreatingList(false)
+      setNewListName('')
+    }
+  }
+
+  function openMoveModal(documentFile: DocsFile) {
+    setMoveCandidate(documentFile)
+    setMoveError('')
+  }
+
+  function toggleListCollapsed(listId: string) {
+    setCollapsedListIds((current) =>
+      current.includes(listId) ? current.filter((id) => id !== listId) : [...current, listId],
+    )
+  }
+
+  function closeMoveModal() {
+    if (isMoveLoading) return
+    setMoveCandidate(null)
+    setMoveError('')
+  }
+
+  async function moveFileToList(file: DocsFile, list: DocList) {
+    if (isMoveLoading) return
+    setIsMoveLoading(true)
+    setMoveError('')
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/docs/files/${encodeDocumentId(file.id)}/move`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder: list.folder }),
+        },
+      )
+      const data = (await response.json()) as DocsFileActionResponse
+      if (!response.ok) {
+        throw new Error(readApiError(data.detail, t.unexpectedError))
+      }
+      if (data.file) {
+        const updatedFile = data.file as DocsFile
+        setDocuments((current) =>
+          current.map((d) => (d.id === file.id ? updatedFile : d)),
+        )
+        setSelectedIds((current) => {
+          if (!current.has(file.id)) return current
+          const next = new Set(current)
+          next.delete(file.id)
+          next.add(updatedFile.id)
+          return next
+        })
+        // Remove from extraLists — folder now exists for real via file structure
+        setExtraLists((current) => current.filter((l) => l.folder !== list.folder))
+      } else {
+        await loadDocuments()
+      }
+      setMoveCandidate(null)
+    } catch (err) {
+      setMoveError(errorMessage(err, t.unexpectedError))
+    } finally {
+      setIsMoveLoading(false)
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -1183,6 +1435,17 @@ function App() {
                   {t.imagesTab}
                   <span className="tab-count">{imageDocuments.length}</span>
                 </button>
+                {fileListTab === 'text' ? (
+                  <button
+                    type="button"
+                    className="new-list-button"
+                    onClick={() => { setIsCreatingList(true); setNewListName('') }}
+                    disabled={isCreatingList}
+                  >
+                    <FolderPlus size={14} />
+                    {t.newList}
+                  </button>
+                ) : null}
               </div>
               <label className="search-field">
                 <Search size={18} />
@@ -1194,116 +1457,290 @@ function App() {
                 />
               </label>
 
+              {fileListTab === 'text' && isCreatingList ? (
+                <div className="new-list-form">
+                  <input
+                    autoFocus
+                    value={newListName}
+                    onChange={(event) => setNewListName(event.target.value)}
+                    onKeyDown={handleNewListKeyDown}
+                    placeholder={t.listNamePlaceholder}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => createNewList(newListName)}
+                    disabled={!newListName.trim()}
+                  >
+                    {t.createList}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setIsCreatingList(false); setNewListName('') }}
+                    aria-label={t.cancelCreateListAria}
+                  >
+                    {t.cancelCreateList}
+                  </button>
+                </div>
+              ) : null}
+
               <div className="file-list" role="list">
                 {isLoadingDocs ? (
                   <StatusLine icon={<Loader2 className="spin" size={18} />} text={t.loadingFiles} />
                 ) : null}
 
-                {!isLoadingDocs && !filteredDocuments.length ? (
-                  <StatusLine
-                    icon={fileListTab === 'images' ? <ImageIcon size={18} /> : <FileText size={18} />}
-                    text={fileListTab === 'images' ? t.noImageFiles : t.noTextFiles}
-                  />
-                ) : null}
+                {fileListTab === 'images' ? (
+                  <>
+                    {!isLoadingDocs && !filteredDocuments.length ? (
+                      <StatusLine icon={<ImageIcon size={18} />} text={t.noImageFiles} />
+                    ) : null}
 
-                {filteredDocuments.map((document) => {
-                  const isEditing = editingDocumentId === document.id
-                  const { suffix } = splitDocumentName(document.name)
-                  const canSaveRename =
-                    Boolean(renameValue.trim()) &&
-                    renameValue.trim() !== splitDocumentName(document.name).stem &&
-                    renamingId !== document.id
+                    {filteredDocuments.map((document) => {
+                      const isEditing = editingDocumentId === document.id
+                      const { suffix } = splitDocumentName(document.name)
+                      const canSaveRename =
+                        Boolean(renameValue.trim()) &&
+                        renameValue.trim() !== splitDocumentName(document.name).stem &&
+                        renamingId !== document.id
 
-                  return (
-                    <article className="file-row" key={document.id} role="listitem">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(document.id)}
-                        onChange={() => toggleDocument(document.id)}
-                        disabled={isEditing || renamingId === document.id}
-                        aria-label={document.name}
-                      />
-                      <DocumentTypeIcon documentType={document.document_type} />
-                      {isEditing ? (
-                        <label className="rename-field">
+                      return (
+                        <article className="file-row" key={document.id} role="listitem">
                           <input
-                            autoFocus
-                            value={renameValue}
-                            onChange={(event) => setRenameValue(event.target.value)}
-                            onKeyDown={(event) => handleRenameKeyDown(event, document)}
-                            aria-label={`${t.renameFileAria}: ${document.name}`}
+                            type="checkbox"
+                            checked={selectedIds.has(document.id)}
+                            onChange={() => toggleDocument(document.id)}
+                            disabled={isEditing || renamingId === document.id}
+                            aria-label={document.name}
                           />
-                          <span>{suffix}</span>
-                        </label>
-                      ) : (
-                        <span className="file-copy">
-                          <strong>{document.name}</strong>
-                          <span>
-                            {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
-                            {formatBytes(document.size_bytes)}
+                          <DocumentTypeIcon documentType={document.document_type} />
+                          {isEditing ? (
+                            <label className="rename-field">
+                              <input
+                                autoFocus
+                                value={renameValue}
+                                onChange={(event) => setRenameValue(event.target.value)}
+                                onKeyDown={(event) => handleRenameKeyDown(event, document)}
+                                aria-label={`${t.renameFileAria}: ${document.name}`}
+                              />
+                              <span>{suffix}</span>
+                            </label>
+                          ) : (
+                            <span className="file-copy">
+                              <strong>{document.name}</strong>
+                              <span>
+                                {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
+                                {formatBytes(document.size_bytes)}
+                              </span>
+                            </span>
+                          )}
+                          <span className="file-actions">
+                            {isEditing ? (
+                              <>
+                                <button
+                                  className="file-cancel"
+                                  type="button"
+                                  onClick={cancelRenamingDocument}
+                                  disabled={renamingId === document.id}
+                                  title={t.cancelRenameTitle}
+                                  aria-label={`${t.cancelRenameAria}: ${document.name}`}
+                                >
+                                  <CircleX size={16} />
+                                </button>
+                                <button
+                                  className="file-confirm"
+                                  type="button"
+                                  onClick={() => void renameDocument(document)}
+                                  disabled={!canSaveRename}
+                                  title={t.saveRenameTitle}
+                                  aria-label={`${t.saveRenameAria}: ${document.name}`}
+                                >
+                                  {renamingId === document.id ? (
+                                    <Loader2 className="spin" size={16} />
+                                  ) : (
+                                    <CircleCheck size={16} />
+                                  )}
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  className="file-rename"
+                                  type="button"
+                                  onClick={() => startRenamingDocument(document)}
+                                  disabled={renamingId === document.id || Boolean(editingDocumentId)}
+                                  title={t.renameFileTitle}
+                                  aria-label={`${t.renameFileAria}: ${document.name}`}
+                                >
+                                  <Pencil size={15} />
+                                </button>
+                                <button
+                                  className="file-archive"
+                                  type="button"
+                                  onClick={() => void archiveDocument(document)}
+                                  disabled={archivingId === document.id || Boolean(editingDocumentId)}
+                                  title={t.archiveFileTitle}
+                                  aria-label={`${t.archiveFileAria}: ${document.name}`}
+                                >
+                                  {archivingId === document.id ? (
+                                    <Loader2 className="spin" size={15} />
+                                  ) : (
+                                    <Trash2 size={15} />
+                                  )}
+                                </button>
+                              </>
+                            )}
                           </span>
-                        </span>
-                      )}
-                      <span className="file-actions">
-                        {isEditing ? (
-                          <>
-                            <button
-                              className="file-cancel"
-                              type="button"
-                              onClick={cancelRenamingDocument}
-                              disabled={renamingId === document.id}
-                              title={t.cancelRenameTitle}
-                              aria-label={`${t.cancelRenameAria}: ${document.name}`}
-                            >
-                              <CircleX size={16} />
-                            </button>
-                            <button
-                              className="file-confirm"
-                              type="button"
-                              onClick={() => void renameDocument(document)}
-                              disabled={!canSaveRename}
-                              title={t.saveRenameTitle}
-                              aria-label={`${t.saveRenameAria}: ${document.name}`}
-                            >
-                              {renamingId === document.id ? (
-                                <Loader2 className="spin" size={16} />
-                              ) : (
-                                <CircleCheck size={16} />
-                              )}
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              className="file-rename"
-                              type="button"
-                              onClick={() => startRenamingDocument(document)}
-                              disabled={renamingId === document.id || Boolean(editingDocumentId)}
-                              title={t.renameFileTitle}
-                              aria-label={`${t.renameFileAria}: ${document.name}`}
-                            >
-                              <Pencil size={15} />
-                            </button>
-                            <button
-                              className="file-archive"
-                              type="button"
-                              onClick={() => void archiveDocument(document)}
-                              disabled={archivingId === document.id || Boolean(editingDocumentId)}
-                              title={t.archiveFileTitle}
-                              aria-label={`${t.archiveFileAria}: ${document.name}`}
-                            >
-                              {archivingId === document.id ? (
-                                <Loader2 className="spin" size={15} />
-                              ) : (
-                                <Trash2 size={15} />
-                              )}
-                            </button>
-                          </>
-                        )}
-                      </span>
-                    </article>
-                  )
-                })}
+                        </article>
+                      )
+                    })}
+                  </>
+                ) : (
+                  docLists.map((list) => {
+                    const listDocs = filteredTextDocsByList[list.id] ?? []
+                    const isListCollapsed = collapsedListIds.includes(list.id)
+                    return (
+                      <section
+                        key={list.id}
+                        className={`file-list-group${isListCollapsed ? ' is-collapsed' : ''}`}
+                        aria-labelledby={`list-heading-${list.id}`}
+                      >
+                        <div className="list-group-header">
+                          <div className="list-group-title">
+                            <h4 id={`list-heading-${list.id}`}>{list.name}</h4>
+                            <span>{listDocs.length}</span>
+                          </div>
+                          <button
+                            className="collapse-toggle list-group-toggle"
+                            type="button"
+                            onClick={() => toggleListCollapsed(list.id)}
+                            aria-expanded={!isListCollapsed}
+                            aria-controls={`list-content-${list.id}`}
+                            title={isListCollapsed ? t.expandSection(list.name) : t.collapseSection(list.name)}
+                            aria-label={isListCollapsed ? t.expandSection(list.name) : t.collapseSection(list.name)}
+                          >
+                            {isListCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+                          </button>
+                        </div>
+
+                        {!isListCollapsed ? (
+                          <div id={`list-content-${list.id}`}>
+                            {!isLoadingDocs && listDocs.length === 0 ? (
+                              <StatusLine icon={<FileText size={18} />} text={t.emptyList} />
+                            ) : null}
+
+                            {listDocs.map((document) => {
+                              const isEditing = editingDocumentId === document.id
+                              const { suffix } = splitDocumentName(document.name)
+                              const canSaveRename =
+                                Boolean(renameValue.trim()) &&
+                                renameValue.trim() !== splitDocumentName(document.name).stem &&
+                                renamingId !== document.id
+
+                              return (
+                                <article className="file-row" key={document.id} role="listitem">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedIds.has(document.id)}
+                                    onChange={() => toggleDocument(document.id)}
+                                    disabled={isEditing || renamingId === document.id}
+                                    aria-label={document.name}
+                                  />
+                                  <DocumentTypeIcon documentType={document.document_type} />
+                                  {isEditing ? (
+                                    <label className="rename-field">
+                                      <input
+                                        autoFocus
+                                        value={renameValue}
+                                        onChange={(event) => setRenameValue(event.target.value)}
+                                        onKeyDown={(event) => handleRenameKeyDown(event, document)}
+                                        aria-label={`${t.renameFileAria}: ${document.name}`}
+                                      />
+                                      <span>{suffix}</span>
+                                    </label>
+                                  ) : (
+                                    <span className="file-copy">
+                                      <strong>{document.name}</strong>
+                                      <span>
+                                        {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
+                                        {formatBytes(document.size_bytes)}
+                                      </span>
+                                    </span>
+                                  )}
+                                  <span className="file-actions">
+                                    {isEditing ? (
+                                      <>
+                                        <button
+                                          className="file-cancel"
+                                          type="button"
+                                          onClick={cancelRenamingDocument}
+                                          disabled={renamingId === document.id}
+                                          title={t.cancelRenameTitle}
+                                          aria-label={`${t.cancelRenameAria}: ${document.name}`}
+                                        >
+                                          <CircleX size={16} />
+                                        </button>
+                                        <button
+                                          className="file-confirm"
+                                          type="button"
+                                          onClick={() => void renameDocument(document)}
+                                          disabled={!canSaveRename}
+                                          title={t.saveRenameTitle}
+                                          aria-label={`${t.saveRenameAria}: ${document.name}`}
+                                        >
+                                          {renamingId === document.id ? (
+                                            <Loader2 className="spin" size={16} />
+                                          ) : (
+                                            <CircleCheck size={16} />
+                                          )}
+                                        </button>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <button
+                                          className="file-move"
+                                          type="button"
+                                          onClick={() => openMoveModal(document)}
+                                          disabled={docLists.length <= 1 || Boolean(editingDocumentId)}
+                                          title={t.moveFileTitle}
+                                          aria-label={`${t.moveFileAria}: ${document.name}`}
+                                        >
+                                          <ArrowRightFromLine size={15} />
+                                        </button>
+                                        <button
+                                          className="file-rename"
+                                          type="button"
+                                          onClick={() => startRenamingDocument(document)}
+                                          disabled={renamingId === document.id || Boolean(editingDocumentId)}
+                                          title={t.renameFileTitle}
+                                          aria-label={`${t.renameFileAria}: ${document.name}`}
+                                        >
+                                          <Pencil size={15} />
+                                        </button>
+                                        <button
+                                          className="file-archive"
+                                          type="button"
+                                          onClick={() => void archiveDocument(document)}
+                                          disabled={archivingId === document.id || Boolean(editingDocumentId)}
+                                          title={t.archiveFileTitle}
+                                          aria-label={`${t.archiveFileAria}: ${document.name}`}
+                                        >
+                                          {archivingId === document.id ? (
+                                            <Loader2 className="spin" size={15} />
+                                          ) : (
+                                            <Trash2 size={15} />
+                                          )}
+                                        </button>
+                                      </>
+                                    )}
+                                  </span>
+                                </article>
+                              )
+                            })}
+                          </div>
+                        ) : null}
+                      </section>
+                    )
+                  })
+                )}
               </div>
 
               <section className="archive-section" aria-labelledby="archive-heading">
@@ -1362,9 +1799,27 @@ function App() {
         <section className="chat-column" aria-labelledby="question-heading">
           <form className="prompt-panel" onSubmit={askModel}>
             <div className="section-header">
-              <div>
-                <h2 id="question-heading">{t.questionHeading}</h2>
-                <p>{t.filesInContext(contextDocuments.length)}</p>
+              <div className="section-title">
+                <div>
+                  <h2 id="question-heading">{t.questionHeading}</h2>
+                  <p>{t.filesInContext(contextDocuments.length)}</p>
+                </div>
+                <button
+                  className={`icon-button small record-button${isRecording ? ' recording' : ''}`}
+                  type="button"
+                  onClick={() => void toggleRecording()}
+                  title={isRecording ? t.stopRecording : t.startRecording}
+                  aria-label={isRecording ? t.stopRecording : t.startRecording}
+                  disabled={isTranscribing}
+                >
+                  {isTranscribing ? (
+                    <Loader2 className="spin" size={16} />
+                  ) : isRecording ? (
+                    <MicOff size={16} />
+                  ) : (
+                    <Mic size={16} />
+                  )}
+                </button>
               </div>
             </div>
 
@@ -1634,6 +2089,48 @@ function App() {
               </button>
             </div>
           </form>
+        </div>
+      ) : null}
+
+      {moveCandidate ? (
+        <div className="modal-backdrop" onClick={closeMoveModal}>
+          <div
+            className="move-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="move-file-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <h2 id="move-file-modal-title">{t.moveFileModalTitle}</h2>
+              <p>{t.moveFileModalText(moveCandidate.name)}</p>
+            </div>
+            {moveError ? <p className="error-text">{moveError}</p> : null}
+            <div className="move-list-options">
+              {docLists.map((list) => {
+                const slashIdx = moveCandidate.id.lastIndexOf('/')
+                const currentFolder = slashIdx === -1 ? '' : moveCandidate.id.slice(0, slashIdx)
+                const isCurrent = list.folder === currentFolder
+                return (
+                  <button
+                    key={list.id}
+                    type="button"
+                    className={`move-list-option${isCurrent ? ' is-current' : ''}`}
+                    onClick={() => { void moveFileToList(moveCandidate, list) }}
+                    disabled={isCurrent || isMoveLoading}
+                  >
+                    {isMoveLoading ? <Loader2 className="spin" size={16} /> : <FolderPlus size={16} />}
+                    {list.name}
+                  </button>
+                )
+              })}
+            </div>
+            <div className="modal-actions">
+              <button type="button" onClick={closeMoveModal} disabled={isMoveLoading}>
+                {t.cancelCreateList}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>
