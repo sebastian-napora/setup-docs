@@ -225,6 +225,10 @@ type Translations = {
   searchSourcesError: string
   searchEmbeddingsError: string
   unexpectedError: string
+  textTab: string
+  imagesTab: string
+  noTextFiles: string
+  noImageFiles: string
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
@@ -250,6 +254,10 @@ const TRANSLATIONS: Record<Language, Translations> = {
     searchFiles: 'Szukaj plików',
     loadingFiles: 'Ładowanie plików',
     noDocsFiles: 'Brak plików PDF, Markdown lub obrazów',
+    noTextFiles: 'Brak plików tekstowych, PDF lub Markdown',
+    noImageFiles: 'Brak plików graficznych',
+    textTab: 'Tekst',
+    imagesTab: 'Obrazy',
     archiveHeading: 'Archiwum',
     archived: (count) => `${count} w archiwum`,
     loadingArchive: 'Ładowanie archiwum',
@@ -344,6 +352,10 @@ const TRANSLATIONS: Record<Language, Translations> = {
     searchFiles: 'Search files',
     loadingFiles: 'Loading files',
     noDocsFiles: 'No PDF, Markdown, or image files',
+    noTextFiles: 'No text, PDF or Markdown files',
+    noImageFiles: 'No image files',
+    textTab: 'Text',
+    imagesTab: 'Images',
     archiveHeading: 'Archive',
     archived: (count) => `${count} archived`,
     loadingArchive: 'Loading archive',
@@ -453,6 +465,7 @@ function App() {
   const [isFilesExpanded, setIsFilesExpanded] = useState(true)
   const [isAnswerExpanded, setIsAnswerExpanded] = useState(true)
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(true)
+  const [fileListTab, setFileListTab] = useState<'text' | 'images'>('text')
   const t = TRANSLATIONS[language]
   const isAsking = activeRequestMode !== null
 
@@ -517,18 +530,27 @@ function App() {
     }
   }, [t.loadArchiveError, t.loadFilesError, t.loadHistoryError, t.unexpectedError])
 
+  const textDocuments = useMemo(
+    () => documents.filter((d) => d.document_type !== 'image'),
+    [documents],
+  )
+  const imageDocuments = useMemo(
+    () => documents.filter((d) => d.document_type === 'image'),
+    [documents],
+  )
   const filteredDocuments = useMemo(() => {
+    const source = fileListTab === 'images' ? imageDocuments : textDocuments
     const normalizedQuery = query.trim().toLowerCase()
     if (!normalizedQuery) {
-      return documents
+      return source
     }
 
-    return documents.filter((document) =>
+    return source.filter((document) =>
       `${document.name} ${document.id} ${document.document_type}`
         .toLowerCase()
         .includes(normalizedQuery),
     )
-  }, [documents, query])
+  }, [fileListTab, imageDocuments, textDocuments, query])
 
   const selectedDocuments = useMemo(
     () => documents.filter((document) => selectedIds.has(document.id)),
@@ -610,6 +632,12 @@ function App() {
       if (nextSelection.has(documentId)) {
         nextSelection.delete(documentId)
       } else {
+        const doc = documents.find((d) => d.id === documentId)
+        if (doc?.document_type === 'image') {
+          documents
+            .filter((d) => d.document_type === 'image' && nextSelection.has(d.id))
+            .forEach((d) => nextSelection.delete(d.id))
+        }
         nextSelection.add(documentId)
       }
       return nextSelection
@@ -617,6 +645,7 @@ function App() {
   }
 
   function selectAllVisible() {
+    if (fileListTab === 'images') return
     setSelectedIds((currentSelection) => {
       const nextSelection = new Set(currentSelection)
       filteredDocuments.forEach((document) => nextSelection.add(document.id))
@@ -894,7 +923,7 @@ function App() {
       mode === 'embedding_search'
         ? []
         : mode === 'source_search' && selectedFiles.length === 0
-          ? documents.map((document) => document.id)
+          ? documents.filter((d) => d.document_type !== 'image').map((document) => document.id)
           : selectedFiles
 
     if (!prompt.trim() || (mode === 'chat' && !files.length) || isAsking) {
@@ -1120,7 +1149,7 @@ function App() {
                 </div>
 
                <div className="buttons">
-                  <button type="button" onClick={selectAllVisible} disabled={!filteredDocuments.length}>
+                  <button type="button" onClick={selectAllVisible} disabled={!filteredDocuments.length || fileListTab === 'images'}>
                     <CheckSquare size={16} />
                     {t.selectAll}
                   </button>
@@ -1135,6 +1164,26 @@ function App() {
 
           {isFilesExpanded ? (
             <div id="files-content">
+              <div className="file-tabs">
+                <button
+                  type="button"
+                  className={`tab-button${fileListTab === 'text' ? ' is-active' : ''}`}
+                  onClick={() => setFileListTab('text')}
+                >
+                  <FileText size={14} />
+                  {t.textTab}
+                  <span className="tab-count">{textDocuments.length}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`tab-button${fileListTab === 'images' ? ' is-active' : ''}`}
+                  onClick={() => setFileListTab('images')}
+                >
+                  <ImageIcon size={14} />
+                  {t.imagesTab}
+                  <span className="tab-count">{imageDocuments.length}</span>
+                </button>
+              </div>
               <label className="search-field">
                 <Search size={18} />
                 <input
@@ -1151,7 +1200,10 @@ function App() {
                 ) : null}
 
                 {!isLoadingDocs && !filteredDocuments.length ? (
-                  <StatusLine icon={<FileText size={18} />} text={t.noDocsFiles} />
+                  <StatusLine
+                    icon={fileListTab === 'images' ? <ImageIcon size={18} /> : <FileText size={18} />}
+                    text={fileListTab === 'images' ? t.noImageFiles : t.noTextFiles}
+                  />
                 ) : null}
 
                 {filteredDocuments.map((document) => {
