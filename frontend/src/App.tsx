@@ -626,6 +626,8 @@ function App() {
     const extra = extraLists.filter((l) => l.folder !== '' && !folders.has(l.folder))
     return [{ id: DODANE_LIST_ID, name: 'Dodane', folder: '' }, ...fromFiles, ...extra]
   }, [textDocuments, extraLists])
+  const areAllListsCollapsed =
+    docLists.length > 0 && docLists.every((list) => collapsedListIds.includes(list.id))
 
   const filteredDocuments = useMemo(() => {
     const source = fileListTab === 'images' ? imageDocuments : textDocuments
@@ -1264,6 +1266,10 @@ function App() {
     )
   }
 
+  function toggleAllListGroups() {
+    setCollapsedListIds(areAllListsCollapsed ? [] : docLists.map((list) => list.id))
+  }
+
   function closeMoveModal() {
     if (isMoveLoading) return
     setMoveCandidate(null)
@@ -1435,18 +1441,32 @@ function App() {
                   {t.imagesTab}
                   <span className="tab-count">{imageDocuments.length}</span>
                 </button>
-                {fileListTab === 'text' ? (
-                  <button
-                    type="button"
-                    className="new-list-button"
-                    onClick={() => { setIsCreatingList(true); setNewListName('') }}
-                    disabled={isCreatingList}
-                  >
-                    <FolderPlus size={14} />
-                    {t.newList}
-                  </button>
-                ) : null}
               </div>
+              {fileListTab === 'text' ? (
+                <div className="button-row list-actions-row">
+                  <div className="buttons">
+                    <button
+                      type="button"
+                      className="list-groups-button"
+                      onClick={toggleAllListGroups}
+                    >
+                      {areAllListsCollapsed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      {areAllListsCollapsed ? t.expandAllLists : t.collapseAllLists}
+                    </button>
+                  </div>
+                  <div className="buttons">
+                    <button
+                      type="button"
+                      className="new-list-button"
+                      onClick={() => { setIsCreatingList(true); setNewListName('') }}
+                      disabled={isCreatingList}
+                    >
+                      <FolderPlus size={14} />
+                      {t.newList}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <label className="search-field">
                 <Search size={18} />
                 <input

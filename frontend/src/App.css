@@ -159,6 +159,10 @@
   gap: 8px;
 }
 
+.list-actions-row {
+  margin-bottom: 10px;
+}
+
 .history-actions {
   display: flex;
   flex-wrap: wrap;
@@ -939,11 +943,11 @@ textarea:focus,
   color: #145544;
 }
 
-.new-list-button {
+.new-list-button,
+.list-groups-button {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
   min-height: 34px;
   padding: 0 10px;
   border-radius: 6px;
@@ -954,7 +958,8 @@ textarea:focus,
   color: #145544;
 }
 
-.new-list-button:hover:not(:disabled) {
+.new-list-button:hover:not(:disabled),
+.list-groups-button:hover:not(:disabled) {
   border-color: #28715f;
   background: #e4f5ee;
 }
