@@ -871,3 +871,54 @@ textarea:focus,
     width: 100%;
   }
 }
+
+.file-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.tab-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  border-color: #e1e7ef;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.tab-button:hover:not(:disabled) {
+  border-color: #9aa8ba;
+  background: #f1f5f9;
+  color: #111827;
+}
+
+.tab-button.is-active {
+  border-color: #28715f;
+  background: #f0faf6;
+  color: #145544;
+}
+
+.tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: #e1e7ef;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tab-button.is-active .tab-count {
+  background: #c6e9dd;
+  color: #145544;
+}
