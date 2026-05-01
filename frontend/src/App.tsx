@@ -164,6 +164,11 @@ type Translations = {
   cancelRenameAria: string
   deleteArchivedTitle: string
   deleteArchivedAria: string
+  clearArchive: string
+  clearArchiveTitle: string
+  clearArchiveAria: string
+  confirmClearArchive: string
+  clearArchiveError: string
   deleteFileModalTitle: string
   deleteFileModalText: (filename: string) => string
   deleteConfirmationLabel: string
@@ -259,6 +264,11 @@ const TRANSLATIONS: Record<Language, Translations> = {
     cancelRenameAria: 'Anuluj zmianę nazwy pliku',
     deleteArchivedTitle: 'Usuń na zawsze',
     deleteArchivedAria: 'Usuń zarchiwizowany plik na zawsze',
+    clearArchive: 'Wyczyść',
+    clearArchiveTitle: 'Wyczyść archiwum',
+    clearArchiveAria: 'Usuń wszystkie pliki z archiwum',
+    confirmClearArchive: 'Usunąć wszystkie pliki z archiwum?',
+    clearArchiveError: 'Nie udało się wyczyścić archiwum.',
     deleteFileModalTitle: 'Usuń plik na zawsze',
     deleteFileModalText: (filename) => `Aby usunąć "${filename}", wpisz USUWAM i naciśnij Enter.`,
     deleteConfirmationLabel: 'Potwierdzenie',
@@ -348,6 +358,11 @@ const TRANSLATIONS: Record<Language, Translations> = {
     cancelRenameAria: 'Cancel file rename',
     deleteArchivedTitle: 'Delete forever',
     deleteArchivedAria: 'Delete archived file forever',
+    clearArchive: 'Clear all',
+    clearArchiveTitle: 'Clear archive',
+    clearArchiveAria: 'Delete all files from archive',
+    confirmClearArchive: 'Delete all files from archive?',
+    clearArchiveError: 'Could not clear archive.',
     deleteFileModalTitle: 'Delete file forever',
     deleteFileModalText: (filename) => `To delete "${filename}", type USUWAM and press Enter.`,
     deleteConfirmationLabel: 'Confirmation',
@@ -832,6 +847,37 @@ function App() {
     }
   }
 
+  async function clearArchive() {
+    if (!window.confirm(t.confirmClearArchive)) {
+      return
+    }
+
+    setIsDeletingArchived(true)
+    setError('')
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/docs/archive`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ confirmation: 'USUWAM' }),
+      })
+      const data = (await response.json()) as DocsFileActionResponse
+      if (!response.ok) {
+        throw new Error(readApiError(data.detail, t.clearArchiveError))
+      }
+
+      setArchivedDocuments([])
+      setDeleteCandidate(null)
+      setDeleteConfirmation('')
+    } catch (clearError) {
+      setError(errorMessage(clearError, t.unexpectedError))
+    } finally {
+      setIsDeletingArchived(false)
+    }
+  }
+
   async function askModel(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const mode: RequestMode = searchWithEmbeddings
@@ -1210,6 +1256,17 @@ function App() {
                 <div className="archive-header">
                   <h3 id="archive-heading">{t.archiveHeading}</h3>
                   <span>{t.archived(archivedDocuments.length)}</span>
+                  <button
+                    className="danger-button compact"
+                    type="button"
+                    onClick={() => void clearArchive()}
+                    disabled={!archivedDocuments.length || isDeletingArchived}
+                    title={t.clearArchiveTitle}
+                    aria-label={t.clearArchiveAria}
+                  >
+                    <Trash2 size={15} />
+                    {t.clearArchive}
+                  </button>
                 </div>
 
                 <div className="archive-list" role="list">

@@ -224,6 +224,28 @@ def delete_archived_library_document(
     return document
 
 
+def clear_archived_library(
+    *,
+    archive_dir: Path,
+    confirmation: str,
+) -> int:
+    if confirmation != "USUWAM":
+        raise DocumentLibraryError('Type "USUWAM" to delete all archived files.')
+
+    documents = list_library_documents(docs_dir=archive_dir)
+    deleted_count = 0
+    for document in documents:
+        document.path.unlink()
+        deleted_count += 1
+
+    # Clean up all empty subdirectories
+    for subdir in sorted(archive_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if subdir.is_dir() and not any(subdir.iterdir()):
+            subdir.rmdir()
+
+    return deleted_count
+
+
 def rename_library_document(
     *,
     docs_dir: Path,

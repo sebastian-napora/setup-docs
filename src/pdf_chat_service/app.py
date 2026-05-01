@@ -238,6 +238,21 @@ async def delete_archived_docs_file(
     return {"deleted": 1, "file": library_document_payload(document)}
 
 
+@app.delete("/api/docs/archive")
+async def clear_archived_docs(
+    request: DeleteArchivedDocumentRequest,
+) -> dict[str, Any]:
+    try:
+        deleted_count = clear_archived_library(
+            archive_dir=settings.docs_archive_dir,
+            confirmation=request.confirmation,
+        )
+    except DocumentLibraryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"deleted": deleted_count}
+
+
 @app.get("/api/docs/history")
 async def list_docs_history() -> dict[str, Any]:
     return {"items": list_docs_chat_history(response_dir=settings.response_dir)}
