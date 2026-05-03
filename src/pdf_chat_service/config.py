@@ -8,6 +8,8 @@ from pdf_chat_service.image import DEFAULT_IMAGE_CHAT_PROMPT, DEFAULT_IMAGE_CHAT
 LOCAL_RAG_INGEST_PATH = "/local_rag/ingest"
 LOCAL_RAG_SEARCH_PATH = "/local_rag/search"
 LOCAL_RAG_QUERY_PATH = "/local_rag/query"
+AUDIO_TRANSCRIPTIONS_PATH = "/v1/audio/transcriptions"
+AUDIO_TRANSCRIPTIONS_PORT = 11114
 
 
 class Settings(BaseSettings):
@@ -24,6 +26,7 @@ class Settings(BaseSettings):
     rag_database_path: Path = Path("rag_data/rag.sqlite3")
     embeddings_url: str = "http://0.0.0.0:11112/v1/embeddings"
     embeddings_model: str = "text-embedding-3-small"
+    audio_transcriptions_url: str | None = None
     compress_url: str = "http://0.0.0.0:11112/compress"
     docs_dir: Path = Path("docs")
     docs_archive_dir: Path = Path("docs_archive")
@@ -35,7 +38,11 @@ class Settings(BaseSettings):
     embeddings_chunk_chars: int = 1_200
     embeddings_chunk_overlap: int = 160
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     def resolved_local_rag_ingest_url(self) -> str:
         if self.local_rag_ingest_url and self.local_rag_ingest_url.strip():
@@ -61,15 +68,30 @@ class Settings(BaseSettings):
             path=LOCAL_RAG_QUERY_PATH,
         )
 
+    def resolved_audio_transcriptions_url(self) -> str:
+        if self.audio_transcriptions_url and self.audio_transcriptions_url.strip():
+            return self.audio_transcriptions_url.strip()
+        return derive_service_url(
+            url=self.chat_completions_url,
+            path=AUDIO_TRANSCRIPTIONS_PATH,
+            port=AUDIO_TRANSCRIPTIONS_PORT,
+        )
 
-def derive_service_url(*, url: str, path: str) -> str:
+
+def derive_service_url(*, url: str, path: str, port: int | None = None) -> str:
     parsed = urlsplit(url)
+    target_port = 11112 if port is None else port
     if not parsed.scheme or not parsed.netloc:
-        return f"http://127.0.0.1:11112{path}"
+        return f"http://127.0.0.1:{target_port}{path}"
 
     netloc = parsed.netloc
-    if parsed.hostname == "0.0.0.0":
-        port = f":{parsed.port}" if parsed.port is not None else ""
-        netloc = f"127.0.0.1{port}"
+    if port is not None or parsed.hostname == "0.0.0.0":
+        hostname = "127.0.0.1" if parsed.hostname == "0.0.0.0" else parsed.hostname
+        if hostname is None:
+            hostname = parsed.netloc
+        elif ":" in hostname and not hostname.startswith("["):
+            hostname = f"[{hostname}]"
+        resolved_port = port if port is not None else parsed.port
+        netloc = f"{hostname}:{resolved_port}" if resolved_port is not None else hostname
 
     return urlunsplit((parsed.scheme, netloc, path, "", ""))

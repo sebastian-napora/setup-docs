@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import httpx
 from fastapi.testclient import TestClient
 
 from pdf_chat_service import app as app_module
@@ -41,6 +42,37 @@ def test_upload_docs_files_stores_multiple_supported_files(
     assert (docs_dir / "scan.png").read_bytes() == b"image bytes"
 
 
+def test_transcribe_audio_proxies_to_configured_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        app_module.settings,
+        "audio_transcriptions_url",
+        "http://transcriber.test/v1/audio/transcriptions",
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_post_audio_transcription(**kwargs):
+        captured.update(kwargs)
+        request = httpx.Request("POST", kwargs["url"])
+        return httpx.Response(200, json={"text": "hello from audio"}, request=request)
+
+    monkeypatch.setattr(app_module, "post_audio_transcription", fake_post_audio_transcription)
+    client = TestClient(app_module.app)
+
+    response = client.post(
+        "/v1/audio/transcriptions",
+        data={"model": "whisper-1"},
+        files={"file": ("recording.webm", b"audio bytes", "audio/webm")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"text": "hello from audio"}
+    assert captured["url"] == "http://transcriber.test/v1/audio/transcriptions"
+    assert captured["data"] == [("model", "whisper-1")]
+    assert captured["files"] == [
+        ("file", ("recording.webm", b"audio bytes", "audio/webm")),
+    ]
+
+
 def test_upload_docs_files_rejects_unsupported_file(
     monkeypatch,
     tmp_path: Path,
@@ -54,7 +86,7 @@ def test_upload_docs_files_rejects_unsupported_file(
     )
 
     assert response.status_code == 400
-    assert "PDF, Markdown, and image" in response.json()["detail"]
+    assert "PDF, Markdown, image, and video" in response.json()["detail"]
     assert not (tmp_path / "docs").exists()
 
 

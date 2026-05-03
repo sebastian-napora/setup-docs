@@ -13,7 +13,15 @@ DEFAULT_IMAGE_CHAT_PROMPT = (
 
 IMAGE_SUFFIXES = frozenset(
     {
+        ".avif",
         ".bmp",
+        ".gif",
+        ".heic",
+        ".heif",
+        ".heics",
+        ".heifs",
+        ".jpe",
+        ".jfif",
         ".jpeg",
         ".jpg",
         ".png",
@@ -25,8 +33,14 @@ IMAGE_SUFFIXES = frozenset(
 
 IMAGE_CONTENT_TYPES = frozenset(
     {
+        "image/avif",
         "image/bmp",
+        "image/gif",
+        "image/heic",
+        "image/heif",
+        "image/jpg",
         "image/jpeg",
+        "image/pjpeg",
         "image/png",
         "image/tiff",
         "image/webp",

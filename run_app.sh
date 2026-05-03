@@ -14,6 +14,8 @@ fi
 
 APP_HOST="${APP_HOST:-0.0.0.0}"
 APP_PORT="${APP_PORT:-8080}"
+APP_SSL_CERT="${APP_SSL_CERT:-}"
+APP_SSL_KEY="${APP_SSL_KEY:-}"
 FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
 FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 BACKEND_RELOAD="${BACKEND_RELOAD:-0}"
@@ -110,7 +112,17 @@ start_backend() {
     backend_args+=("--reload")
   fi
 
-  echo "Starting backend: http://localhost:${APP_PORT}"
+  if [ -n "${APP_SSL_CERT}" ] && [ -n "${APP_SSL_KEY}" ]; then
+    if [ -r "${APP_SSL_CERT}" ] && [ -r "${APP_SSL_KEY}" ]; then
+      backend_args+=(--ssl-certfile "${APP_SSL_CERT}" --ssl-keyfile "${APP_SSL_KEY}")
+    else
+      echo "WARNING: APP_SSL_CERT/APP_SSL_KEY are set but not readable by $(whoami)." >&2
+      echo "         Run 'sudo bash setup_ssl.sh' to fix cert permissions." >&2
+      echo "         Starting backend in HTTP mode." >&2
+    fi
+  fi
+
+  echo "Starting backend: http${APP_SSL_CERT:+s}://localhost:${APP_PORT}"
   (
     cd "${ROOT_DIR}"
     "${VENV_DIR}/bin/uvicorn" "${backend_args[@]}"
@@ -141,10 +153,15 @@ Model endpoint:
   ${MODEL_URL}
 
 Backend:
-  http://localhost:${APP_PORT}
+  http${APP_SSL_CERT:+s}://localhost:${APP_PORT}
 
 Frontend:
-  http://localhost:${FRONTEND_PORT}
+  https://localhost:${FRONTEND_PORT}
+
+HTTPS via Tailscale (enables microphone recording):
+  APP_SSL_CERT=~/.config/tailscale/certs/aitopatom-4fc6.tailca9a17.ts.net.crt \\
+  APP_SSL_KEY=~/.config/tailscale/certs/aitopatom-4fc6.tailca9a17.ts.net.key \\
+  ./run_app.sh
 
 Press Ctrl+C to stop both processes.
 

@@ -66,6 +66,51 @@ def test_extract_image_document_text_uses_image_endpoint(monkeypatch: pytest.Mon
     assert document_type == "image"
 
 
+def test_extract_heic_document_text_uses_image_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_extract_image_text(
+        *,
+        image_bytes: bytes,
+        filename: str | None,
+        content_type: str | None,
+        max_chars: int,
+        image_chat_url: str,
+        image_chat_prompt: str,
+        image_chat_thinking: bool,
+        timeout_seconds: float,
+    ) -> str:
+        assert image_bytes == b"image bytes"
+        assert filename == "photo.heic"
+        assert content_type == "image/heic"
+        assert max_chars == 500
+        return "Text from phone image"
+
+    monkeypatch.setattr("pdf_chat_service.document.extract_image_text", fake_extract_image_text)
+
+    text, document_type = extract_document_text(
+        file_bytes=b"image bytes",
+        filename="photo.heic",
+        content_type="image/heic",
+        max_chars=500,
+        image_chat_url="http://image.test/analyze",
+        image_chat_prompt="Read image",
+        image_chat_thinking=False,
+        timeout_seconds=10,
+    )
+
+    assert text == "Text from phone image"
+    assert document_type == "image"
+
+
+def test_extract_video_document_rejects_as_ai_context() -> None:
+    with pytest.raises(DocumentExtractionError, match="Video files can be uploaded"):
+        extract_document_text(
+            file_bytes=b"video",
+            filename="clip.mov",
+            content_type="video/quicktime",
+            max_chars=120_000,
+        )
+
+
 def test_extract_document_rejects_unsupported_file() -> None:
     with pytest.raises(DocumentExtractionError, match="PDF, Markdown, or image"):
         extract_document_text(

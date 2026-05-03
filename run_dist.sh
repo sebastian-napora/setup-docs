@@ -157,8 +157,16 @@ choose_model_endpoint
 MODEL_URL="${CHAT_COMPLETIONS_URL:-http://0.0.0.0:${MODEL_PORT}/v1/chat/completions}"
 
 APP_SCHEME="http"
+_use_ssl=0
 if [ -n "${APP_SSL_CERT}" ] && [ -n "${APP_SSL_KEY}" ]; then
-  APP_SCHEME="https"
+  if [ -r "${APP_SSL_CERT}" ] && [ -r "${APP_SSL_KEY}" ]; then
+    APP_SCHEME="https"
+    _use_ssl=1
+  else
+    echo "WARNING: APP_SSL_CERT/APP_SSL_KEY are set but not readable by $(whoami)." >&2
+    echo "         Run 'sudo bash setup_ssl.sh' to fix cert permissions." >&2
+    echo "         Starting in HTTP mode." >&2
+  fi
 fi
 
 cat <<INFO
@@ -181,8 +189,8 @@ Endpoint choice shortcuts:
   MODEL_ENDPOINT=remote ./run_dist.sh
 
 HTTPS via Tailscale (enables microphone recording):
-  tailscale cert aitopatom-4fc6.tailca9a17.ts.net
-  APP_SSL_CERT=aitopatom-4fc6.tailca9a17.ts.net.crt APP_SSL_KEY=aitopatom-4fc6.tailca9a17.ts.net.key ./run_dist.sh
+  sudo bash setup_ssl.sh   # issue certs once, then just run:
+  ./run_dist.sh
 
 Press Ctrl+C to stop the server.
 
@@ -198,7 +206,7 @@ uvicorn_args=(
   --port "${APP_PORT}"
 )
 
-if [ -n "${APP_SSL_CERT}" ] && [ -n "${APP_SSL_KEY}" ]; then
+if [ "${_use_ssl}" = "1" ]; then
   uvicorn_args+=(--ssl-certfile "${APP_SSL_CERT}" --ssl-keyfile "${APP_SSL_KEY}")
 fi
 

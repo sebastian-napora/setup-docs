@@ -1,14 +1,23 @@
 import json
+import mimetypes
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from pdf_chat_service.chat_client import build_chat_payload, post_chat_completion
+from pdf_chat_service.chat_client import (
+    MultipartData,
+    MultipartFiles,
+    build_chat_payload,
+    post_audio_transcription,
+    post_chat_completion,
+)
 from pdf_chat_service.config import Settings
 from pdf_chat_service.document import DocumentExtractionError, extract_document_text
 from pdf_chat_service.docs_library import (
@@ -24,11 +33,13 @@ from pdf_chat_service.docs_library import (
     extract_library_document,
     list_library_documents,
     move_library_document,
+    read_counts_cache,
     rename_library_document,
     resolve_library_document,
     save_library_upload,
     search_extracted_documents,
     validate_library_upload,
+    write_counts_cache,
 )
 from pdf_chat_service.embeddings import (
     EmbeddingError,
@@ -99,6 +110,64 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/v1/audio/transcriptions")
+async def transcribe_audio(request: Request) -> Any:
+    form = await request.form()
+    data: MultipartData = []
+    files: MultipartFiles = []
+
+    for key, value in form.multi_items():
+        if isinstance(value, StarletteUploadFile):
+            file_bytes = await value.read()
+            if not file_bytes:
+                raise HTTPException(status_code=400, detail="Uploaded audio file is empty.")
+            files.append(
+                (
+                    key,
+                    (
+                        value.filename or key,
+                        file_bytes,
+                        value.content_type or "application/octet-stream",
+                    ),
+                )
+            )
+        else:
+            data.append((key, str(value)))
+
+    if not any(key == "file" for key, _ in files):
+        raise HTTPException(status_code=400, detail="Audio transcription requires a file upload.")
+
+    try:
+        response = await post_audio_transcription(
+            url=settings.resolved_audio_transcriptions_url(),
+            data=data,
+            files=files,
+            timeout_seconds=settings.request_timeout_seconds,
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail={
+                "message": "Audio transcription endpoint returned an error.",
+                "url": str(exc.request.url),
+                "response": exc.response.text,
+            },
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not reach audio transcription endpoint: {exc}",
+        ) from exc
+
+    try:
+        return response.json()
+    except ValueError:
+        return Response(
+            content=response.content,
+            media_type=response.headers.get("content-type", "text/plain"),
+        )
+
+
 @app.get("/api/docs/files")
 async def list_docs_files() -> dict[str, Any]:
     try:
@@ -112,6 +181,16 @@ async def list_docs_files() -> dict[str, Any]:
     }
 
 
+@app.get("/api/docs/counts")
+async def get_docs_counts() -> dict[str, Any]:
+    cached = read_counts_cache(settings.docs_dir)
+    if cached is not None:
+        return cached
+    write_counts_cache(settings.docs_dir)
+    cached = read_counts_cache(settings.docs_dir)
+    return cached or {"counts": {}, "lastUpdateDate": None}
+
+
 @app.post("/api/docs/files")
 async def upload_docs_files(
     files: list[UploadFile] = File(...),
@@ -123,7 +202,11 @@ async def upload_docs_files(
         try:
             validate_library_upload(filename=file.filename, file_bytes=file_bytes)
         except DocumentLibraryError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            filename = file.filename or "selected file"
+            raise HTTPException(
+                status_code=400,
+                detail=f'Could not upload "{filename}": {exc}',
+            ) from exc
         pending_uploads.append((file.filename, file_bytes))
 
     if not pending_uploads:
@@ -145,6 +228,8 @@ async def upload_docs_files(
     if embed:
         try:
             for document in documents:
+                if document.document_type == "video":
+                    continue
                 embeddings.append(
                     await create_library_document_embeddings(
                         docs_dir=settings.docs_dir,
@@ -179,6 +264,7 @@ async def upload_docs_files(
                 detail=f"Could not reach local RAG ingest endpoint: {exc}",
             ) from exc
 
+    write_counts_cache(settings.docs_dir)
     return {
         "docs_dir": str(settings.docs_dir),
         "files": [library_document_payload(document) for document in documents],
@@ -210,7 +296,22 @@ async def archive_docs_file(document_id: str) -> dict[str, Any]:
     except DocumentLibraryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    write_counts_cache(settings.docs_dir)
     return {"file": library_document_payload(document)}
+
+
+@app.get("/api/docs/files/{document_id:path}/content")
+async def get_docs_file_content(document_id: str) -> FileResponse:
+    try:
+        document = resolve_library_document(
+            docs_dir=settings.docs_dir,
+            document_id=document_id,
+        )
+    except DocumentLibraryError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    content_type = mimetypes.guess_type(document.name)[0] or "application/octet-stream"
+    return FileResponse(path=str(document.path), media_type=content_type)
 
 
 @app.post("/api/docs/files/{document_id:path}/move")
@@ -224,6 +325,7 @@ async def move_docs_file(document_id: str, request: MoveDocumentRequest) -> dict
     except DocumentLibraryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    write_counts_cache(settings.docs_dir)
     return {"file": library_document_payload(document)}
 
 

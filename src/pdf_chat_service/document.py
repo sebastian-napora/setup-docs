@@ -9,6 +9,7 @@ from pdf_chat_service.image import (
     extract_image_text,
 )
 from pdf_chat_service.pdf import PdfExtractionError, extract_pdf_text
+from pdf_chat_service.video import VIDEO_CONTENT_TYPES, VIDEO_SUFFIXES
 
 
 class DocumentExtractionError(ValueError):
@@ -56,6 +57,11 @@ def extract_document_text(
             )
         except ImageExtractionError as exc:
             raise DocumentExtractionError(str(exc)) from exc
+
+    if normalized_content_type in VIDEO_CONTENT_TYPES or suffix in VIDEO_SUFFIXES:
+        raise DocumentExtractionError(
+            "Video files can be uploaded and organized, but cannot be used as AI text context."
+        )
 
     raise DocumentExtractionError("Upload must be a PDF, Markdown, or image file.")
 

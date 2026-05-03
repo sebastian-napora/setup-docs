@@ -23,12 +23,13 @@ def test_list_library_documents_returns_supported_files(tmp_path: Path) -> None:
     (docs_dir / "notes.md").write_text("# Notes", encoding="utf-8")
     (docs_dir / "invite.pdf").write_bytes(b"%PDF")
     (docs_dir / "scan.png").write_bytes(b"image")
+    (docs_dir / "clip.mov").write_bytes(b"video")
     (docs_dir / "ignored.txt").write_text("Nope", encoding="utf-8")
 
     documents = list_library_documents(docs_dir)
 
-    assert [document.id for document in documents] == ["invite.pdf", "notes.md", "scan.png"]
-    assert [document.document_type for document in documents] == ["pdf", "markdown", "image"]
+    assert [document.id for document in documents] == ["clip.mov", "invite.pdf", "notes.md", "scan.png"]
+    assert [document.document_type for document in documents] == ["video", "pdf", "markdown", "image"]
 
 
 def test_resolve_library_document_rejects_path_traversal(tmp_path: Path) -> None:
@@ -52,6 +53,52 @@ def test_save_library_upload_stores_supported_file_in_docs(tmp_path: Path) -> No
     assert document.id == "notes.md"
     assert document.document_type == "markdown"
     assert (docs_dir / "notes.md").read_text(encoding="utf-8") == "# Notes"
+
+
+def test_save_library_upload_accepts_phone_heic_images(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+
+    document = save_library_upload(
+        docs_dir=docs_dir,
+        filename="photo.HEIC",
+        file_bytes=b"image",
+    )
+
+    assert document.id == "photo.HEIC"
+    assert document.document_type == "image"
+    assert (docs_dir / "photo.HEIC").read_bytes() == b"image"
+
+
+def test_save_library_upload_accepts_common_mobile_image_formats(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+
+    avif_document = save_library_upload(
+        docs_dir=docs_dir,
+        filename="photo.avif",
+        file_bytes=b"avif",
+    )
+    gif_document = save_library_upload(
+        docs_dir=docs_dir,
+        filename="animation.gif",
+        file_bytes=b"gif",
+    )
+
+    assert avif_document.document_type == "image"
+    assert gif_document.document_type == "image"
+
+
+def test_save_library_upload_accepts_phone_videos(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+
+    document = save_library_upload(
+        docs_dir=docs_dir,
+        filename="clip.MOV",
+        file_bytes=b"video",
+    )
+
+    assert document.id == "clip.MOV"
+    assert document.document_type == "video"
+    assert (docs_dir / "clip.MOV").read_bytes() == b"video"
 
 
 def test_save_library_upload_suffixes_duplicate_filename(tmp_path: Path) -> None:
@@ -85,7 +132,7 @@ def test_save_library_upload_normalizes_path_filename(tmp_path: Path) -> None:
 
 
 def test_save_library_upload_rejects_unsupported_file(tmp_path: Path) -> None:
-    with pytest.raises(DocumentLibraryError, match="PDF, Markdown, and image"):
+    with pytest.raises(DocumentLibraryError, match="PDF, Markdown, image, and video"):
         save_library_upload(
             docs_dir=tmp_path / "docs",
             filename="notes.txt",

@@ -4,15 +4,20 @@ import {
   CircleX,
   CheckSquare,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  ExternalLink,
+  Eye,
   FileText,
   FolderPlus,
   History as HistoryIcon,
   Image as ImageIcon,
+  Images,
   Languages,
   Loader2,
   Mic,
   MicOff,
+  MoreHorizontal,
   Pencil,
   RefreshCw,
   Search,
@@ -20,8 +25,22 @@ import {
   Square,
   Trash2,
   Upload,
+  Video,
+  X,
 } from 'lucide-react'
-import { type FormEvent, type KeyboardEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Component,
+  type ErrorInfo,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import { createPortal } from 'react-dom'
 import './App.css'
 
 type DocsFile = {
@@ -141,6 +160,21 @@ type DisplayAnswer = {
 }
 
 type Language = 'pl' | 'en'
+type FileListTab = 'text' | 'images'
+type SnackbarMessage = {
+  kind: 'success' | 'error' | 'loading'
+  text: string
+  onRetry?: () => void
+}
+
+type OverflowMenuItem = {
+  key: string
+  icon: ReactNode
+  label: string
+  onClick: () => void
+  disabled?: boolean
+  className?: string
+}
 
 type Translations = {
   appEyebrow: string
@@ -156,6 +190,7 @@ type Translations = {
   addFiles: string
   uploadingFiles: string
   embeddingFiles: string
+  uploadFilesProcessing: (count: number) => string
   embedFiles: string
   searchFiles: string
   loadingFiles: string
@@ -228,6 +263,9 @@ type Translations = {
   deleteHistoryError: string
   clearHistoryError: string
   uploadFilesError: string
+  uploadFilesSuccess: (count: number) => string
+  uploadBatchProgress: (batch: number, totalBatches: number, uploaded: number, total: number) => string
+  uploadBatchFailed: (count: number, reason: string) => string
   renameFilesError: string
   archiveFilesError: string
   loadArchiveError: string
@@ -242,25 +280,80 @@ type Translations = {
   micUnavailable: string
   startRecording: string
   stopRecording: string
+  uploadAudioFile: string
   transcriptionError: string
   newList: string
   collapseAllLists: string
   expandAllLists: string
   moveFileTitle: string
   moveFileAria: string
+  selectImages: string
+  moveSelected: string
   moveFileModalTitle: string
   moveFileModalText: (filename: string) => string
+  moveFilesModalText: (count: number) => string
   listNamePlaceholder: string
   createList: string
   cancelCreateList: string
   cancelCreateListAria: string
   emptyList: string
+  closeMessage: string
+  retryUpload: string
+  gallery: string
+  openPdf: string
+  previewImage: string
+  closeGallery: string
+  galleryPrev: string
+  galleryNext: string
+  galleryCount: (current: number, total: number) => string
+  selectList: string
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 const LANGUAGE_STORAGE_KEY = 'docs-chat-language'
-const DOCUMENT_UPLOAD_ACCEPT = '.pdf,.md,.markdown,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff'
+const EXTRA_LISTS_STORAGE_KEY = 'docs-extra-lists'
+const DOCUMENT_UPLOAD_ACCEPT = '.pdf,.md,.markdown,image/*,video/*,.heic,.heif,.heics,.heifs,.mov,.mp4,.m4v,.webm,.3gp,.3g2,.avi,.mkv,.hevc'
+const PROMPT_AUDIO_ACCEPT = 'audio/*,.webm,.mp3,.wav,.m4a,.ogg,.flac,.aac,.mp4'
 const DODANE_LIST_ID = 'dodane'
+const UPLOAD_BATCH_SIZE = 10
+
+type ErrorBoundaryProps = {
+  children: ReactNode
+}
+
+type ErrorBoundaryState = {
+  errorMessage: string
+}
+
+export class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { errorMessage: '' }
+
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    return { errorMessage: stringifyDiagnosticValue(error) }
+  }
+
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    console.error('React render error', error, info.componentStack)
+  }
+
+  render() {
+    if (this.state.errorMessage) {
+      return (
+        <div className="app-shell">
+          <div className="app-error-boundary" role="alert">
+            <h1>Application error</h1>
+            <p>{this.state.errorMessage}</p>
+            <button type="button" onClick={() => window.location.reload()}>
+              Reload
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    return this.props.children
+  }
+}
 
 const TRANSLATIONS: Record<Language, Translations> = {
   pl: {
@@ -277,12 +370,13 @@ const TRANSLATIONS: Record<Language, Translations> = {
     addFiles: 'Dodaj',
     uploadingFiles: 'Dodaję',
     embeddingFiles: 'Embeduję',
+    uploadFilesProcessing: (count) => `Przetwarzam ${pluralFilesPl(count)}...`,
     embedFiles: 'Embed',
     searchFiles: 'Szukaj plików',
     loadingFiles: 'Ładowanie plików',
-    noDocsFiles: 'Brak plików PDF, Markdown lub obrazów',
+    noDocsFiles: 'Brak plików PDF, Markdown, obrazów lub wideo',
     noTextFiles: 'Brak plików tekstowych, PDF lub Markdown',
-    noImageFiles: 'Brak plików graficznych',
+    noImageFiles: 'Brak obrazów lub wideo',
     textTab: 'Tekst',
     imagesTab: 'Obrazy',
     archiveHeading: 'Archiwum',
@@ -353,6 +447,10 @@ const TRANSLATIONS: Record<Language, Translations> = {
     deleteHistoryError: 'Nie udało się usunąć wpisu historii.',
     clearHistoryError: 'Nie udało się wyczyścić historii.',
     uploadFilesError: 'Nie udało się dodać plików.',
+    uploadFilesSuccess: (count) => `Dodano ${pluralFilesPl(count)}.`,
+    uploadBatchProgress: (batch, totalBatches, uploaded, total) =>
+      `Partia ${batch}/${totalBatches} (${uploaded}/${total} plików)...`,
+    uploadBatchFailed: (count, reason) => `Nieudane: ${pluralFilesPl(count)}. ${reason}`,
     renameFilesError: 'Nie udało się zmienić nazwy pliku.',
     archiveFilesError: 'Nie udało się przenieść pliku do archiwum.',
     loadArchiveError: 'Nie udało się załadować archiwum.',
@@ -362,6 +460,7 @@ const TRANSLATIONS: Record<Language, Translations> = {
     unexpectedError: 'Wystąpił nieoczekiwany błąd.',
     startRecording: 'Nagraj pytanie',
     stopRecording: 'Zatrzymaj nagrywanie',
+    uploadAudioFile: 'Dodaj nagranie',
     transcriptionError: 'Nie udało się transkrybować nagrania.',
     micUnavailable: 'Nagrywanie wymaga HTTPS lub localhost.',
     newList: 'Nowa lista',
@@ -369,13 +468,26 @@ const TRANSLATIONS: Record<Language, Translations> = {
     expandAllLists: 'Rozwiń wszystkie',
     moveFileTitle: 'Przenieś do listy',
     moveFileAria: 'Przenieś plik do listy',
+    selectImages: 'Zaznacz media',
+    moveSelected: 'Przenieś zaznaczone',
     moveFileModalTitle: 'Przenieś plik',
     moveFileModalText: (filename) => `Przenieś "${filename}" do listy`,
+    moveFilesModalText: (count) => `Przenieś ${pluralFilesPl(count)} do listy`,
     listNamePlaceholder: 'Nazwa listy',
     createList: 'Utwórz',
     cancelCreateList: 'Anuluj',
     cancelCreateListAria: 'Anuluj tworzenie listy',
     emptyList: 'Lista jest pusta',
+    closeMessage: 'Zamknij',
+    retryUpload: 'Ponów',
+    gallery: 'Galeria',
+    openPdf: 'Otwórz PDF',
+    previewImage: 'Podgląd',
+    closeGallery: 'Zamknij galerię',
+    galleryPrev: 'Poprzedni',
+    galleryNext: 'Następny',
+    galleryCount: (current, total) => `${current} / ${total}`,
+    selectList: 'Zaznacz listę',
   },
   en: {
     appEyebrow: 'docs folder',
@@ -391,12 +503,13 @@ const TRANSLATIONS: Record<Language, Translations> = {
     addFiles: 'Add',
     uploadingFiles: 'Adding',
     embeddingFiles: 'Embedding',
+    uploadFilesProcessing: (count) => `Processing ${count} ${count === 1 ? 'file' : 'files'}...`,
     embedFiles: 'Embed',
     searchFiles: 'Search files',
     loadingFiles: 'Loading files',
-    noDocsFiles: 'No PDF, Markdown, or image files',
+    noDocsFiles: 'No PDF, Markdown, image, or video files',
     noTextFiles: 'No text, PDF or Markdown files',
-    noImageFiles: 'No image files',
+    noImageFiles: 'No image or video files',
     textTab: 'Text',
     imagesTab: 'Images',
     archiveHeading: 'Archive',
@@ -467,6 +580,10 @@ const TRANSLATIONS: Record<Language, Translations> = {
     deleteHistoryError: 'Could not delete history item.',
     clearHistoryError: 'Could not clear history.',
     uploadFilesError: 'Could not add files.',
+    uploadFilesSuccess: (count) => `Added ${count} ${count === 1 ? 'file' : 'files'}.`,
+    uploadBatchProgress: (batch, totalBatches, uploaded, total) =>
+      `Batch ${batch}/${totalBatches} (${uploaded}/${total} files)...`,
+    uploadBatchFailed: (count, reason) => `Failed: ${count} ${count === 1 ? 'file' : 'files'}. ${reason}`,
     renameFilesError: 'Could not rename file.',
     archiveFilesError: 'Could not move file to archive.',
     loadArchiveError: 'Could not load archive.',
@@ -476,6 +593,7 @@ const TRANSLATIONS: Record<Language, Translations> = {
     unexpectedError: 'Unexpected error.',
     startRecording: 'Record question',
     stopRecording: 'Stop recording',
+    uploadAudioFile: 'Upload voice note',
     transcriptionError: 'Could not transcribe recording.',
     micUnavailable: 'Recording requires HTTPS or localhost.',
     newList: 'New list',
@@ -483,24 +601,41 @@ const TRANSLATIONS: Record<Language, Translations> = {
     expandAllLists: 'Expand all',
     moveFileTitle: 'Move to list',
     moveFileAria: 'Move file to list',
+    selectImages: 'Select media',
+    moveSelected: 'Move selected',
     moveFileModalTitle: 'Move file',
     moveFileModalText: (filename) => `Move "${filename}" to list`,
+    moveFilesModalText: (count) => `Move ${count} files to list`,
     listNamePlaceholder: 'List name',
     createList: 'Create',
     cancelCreateList: 'Cancel',
     cancelCreateListAria: 'Cancel list creation',
     emptyList: 'List is empty',
+    closeMessage: 'Close',
+    retryUpload: 'Retry',
+    gallery: 'Gallery',
+    openPdf: 'Open PDF',
+    previewImage: 'Preview',
+    closeGallery: 'Close gallery',
+    galleryPrev: 'Previous',
+    galleryNext: 'Next',
+    galleryCount: (current, total) => `${current} / ${total}`,
+    selectList: 'Select list',
   },
 }
 
 function App() {
+  const uploadInputId = useId()
   const uploadInputRef = useRef<HTMLInputElement | null>(null)
+  const promptAudioInputId = useId()
+  const promptAudioInputRef = useRef<HTMLInputElement | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioChunksRef = useRef<Blob[]>([])
   const [language, setLanguage] = useState<Language>(getInitialLanguage)
   const [documents, setDocuments] = useState<DocsFile[]>([])
   const [archivedDocuments, setArchivedDocuments] = useState<DocsFile[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [moveSelectedImageIds, setMoveSelectedImageIds] = useState<Set<string>>(() => new Set())
   const [query, setQuery] = useState('')
   const [prompt, setPrompt] = useState('')
   const [findContextInFiles, setFindContextInFiles] = useState(false)
@@ -511,6 +646,8 @@ function App() {
   const [historyItems, setHistoryItems] = useState<DocsHistoryItem[]>([])
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [uploadSnackbar, setUploadSnackbar] = useState<SnackbarMessage | null>(null)
+  const [diagnosticMessage, setDiagnosticMessage] = useState('')
   const [isLoadingDocs, setIsLoadingDocs] = useState(true)
   const [isLoadingArchive, setIsLoadingArchive] = useState(true)
   const [isLoadingHistory, setIsLoadingHistory] = useState(true)
@@ -528,16 +665,64 @@ function App() {
   const [isFilesExpanded, setIsFilesExpanded] = useState(true)
   const [isAnswerExpanded, setIsAnswerExpanded] = useState(true)
   const [isHistoryExpanded, setIsHistoryExpanded] = useState(true)
-  const [fileListTab, setFileListTab] = useState<'text' | 'images'>('text')
-  const [extraLists, setExtraLists] = useState<DocList[]>([])
-  const [moveCandidate, setMoveCandidate] = useState<DocsFile | null>(null)
+  const [fileListTab, setFileListTab] = useState<FileListTab>('text')
+  const [extraLists, setExtraLists] = useState<DocList[]>(getInitialExtraLists)
+  const [moveCandidates, setMoveCandidates] = useState<DocsFile[] | null>(null)
   const [isMoveLoading, setIsMoveLoading] = useState(false)
   const [moveError, setMoveError] = useState('')
   const [isCreatingList, setIsCreatingList] = useState(false)
   const [newListName, setNewListName] = useState('')
   const [collapsedListIds, setCollapsedListIds] = useState<string[]>([])
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null)
+  const [listCounts, setListCounts] = useState<Record<string, number>>({})
+  const localCountsDateRef = useRef<string | null>(null)
   const t = TRANSLATIONS[language]
   const isAsking = activeRequestMode !== null
+
+  useEffect(() => {
+    const showDiagnostic = (source: string, message: string) => {
+      const cleanMessage = message.trim()
+      if (cleanMessage) {
+        setDiagnosticMessage(`${source}: ${cleanMessage}`)
+      }
+    }
+
+    const handleWindowError = (event: ErrorEvent) => {
+      showDiagnostic('Runtime error', event.message || stringifyDiagnosticValue(event.error))
+    }
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      showDiagnostic('Promise rejection', stringifyDiagnosticValue(event.reason))
+    }
+
+    const originalConsoleError = console.error
+    console.error = (...args: unknown[]) => {
+      originalConsoleError(...args)
+      showDiagnostic('Console error', args.map(stringifyDiagnosticValue).join(' '))
+    }
+
+    const originalFetch = window.fetch.bind(window)
+    window.fetch = (async (...args: Parameters<typeof fetch>) => {
+      try {
+        return await originalFetch(...args)
+      } catch (fetchError) {
+        showDiagnostic(
+          'Network error',
+          `${fetchRequestLabel(args[0])}: ${stringifyDiagnosticValue(fetchError)}`,
+        )
+        throw fetchError
+      }
+    }) as typeof window.fetch
+
+    window.addEventListener('error', handleWindowError)
+    window.addEventListener('unhandledrejection', handleUnhandledRejection)
+
+    return () => {
+      console.error = originalConsoleError
+      window.fetch = originalFetch
+      window.removeEventListener('error', handleWindowError)
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection)
+    }
+  }, [])
 
   useEffect(() => {
     document.documentElement.lang = language
@@ -546,9 +731,36 @@ function App() {
   }, [language, t.appTitle])
 
   useEffect(() => {
+    try {
+      localStorage.setItem(EXTRA_LISTS_STORAGE_KEY, JSON.stringify(extraLists))
+    } catch {
+      // ignore storage errors
+    }
+  }, [extraLists])
+
+  useEffect(() => {
     let cancelled = false
 
     async function loadInitialData() {
+      // Fire counts fetch immediately (tiny JSON, resolves fast for early display)
+      const countsPromise = fetch(`${API_BASE_URL}/api/docs/counts`)
+        .then(
+          (r) =>
+            r.json() as Promise<{ counts: Record<string, number>; lastUpdateDate: string | null }>,
+        )
+        .then((data) => {
+          if (!cancelled || !(data.counts && typeof data.counts === 'object')) return
+          const serverDate = data.lastUpdateDate ?? null
+          const localDate = localCountsDateRef.current
+          // Only apply server counts if they are not older than local optimistic updates
+          if (!localDate || !serverDate || serverDate >= localDate) {
+            setListCounts(data.counts)
+          }
+        })
+        .catch(() => {
+          // best-effort; ignore
+        })
+
       try {
         const filesResponse = await fetch(`${API_BASE_URL}/api/docs/files`)
         const filesData = (await filesResponse.json()) as DocsFilesResponse
@@ -578,6 +790,23 @@ function App() {
           const availableIds = new Set(files.map((file) => file.id))
           return new Set([...currentSelection].filter((id) => availableIds.has(id)))
         })
+        setMoveSelectedImageIds((currentSelection) => {
+          const availableImageIds = new Set(
+            files
+              .filter((file) => file.document_type === 'image' || file.document_type === 'video')
+              .map((file) => file.id),
+          )
+          return new Set([...currentSelection].filter((id) => availableImageIds.has(id)))
+        })
+        // Sync counts from authoritative file list, reset local optimistic tracking
+        const freshCounts: Record<string, number> = {}
+        for (const file of files) {
+          const folder = getDocumentFolder(file.id)
+          freshCounts[folder] = (freshCounts[folder] ?? 0) + 1
+        }
+        setListCounts(freshCounts)
+        localCountsDateRef.current = null
+
         setHistoryItems(Array.isArray(historyData.items) ? historyData.items : [])
         setArchivedDocuments(Array.isArray(archiveData.files) ? archiveData.files : [])
       } catch (loadError) {
@@ -590,6 +819,7 @@ function App() {
           setIsLoadingArchive(false)
           setIsLoadingHistory(false)
         }
+        void countsPromise
       }
     }
 
@@ -601,55 +831,42 @@ function App() {
   }, [t.loadArchiveError, t.loadFilesError, t.loadHistoryError, t.unexpectedError])
 
   const textDocuments = useMemo(
-    () => documents.filter((d) => d.document_type !== 'image'),
+    () => documents.filter((d) => d.document_type !== 'image' && d.document_type !== 'video'),
     [documents],
   )
   const imageDocuments = useMemo(
-    () => documents.filter((d) => d.document_type === 'image'),
+    () => documents.filter((d) => d.document_type === 'image' || d.document_type === 'video'),
     [documents],
   )
+  const currentTabDocuments = useMemo(
+    () => (fileListTab === 'images' ? imageDocuments : textDocuments),
+    [fileListTab, imageDocuments, textDocuments],
+  )
 
-  // Derive lists from actual folder structure of text files + ephemeral newly-created lists
-  const docLists = useMemo<DocList[]>(() => {
-    const folders = new Set<string>()
-    textDocuments.forEach((doc) => {
-      const slashIdx = doc.id.lastIndexOf('/')
-      if (slashIdx !== -1) {
-        folders.add(doc.id.slice(0, slashIdx))
-      }
-    })
-    const fromFiles: DocList[] = [...folders].sort().map((folder) => ({
-      id: folder,
-      name: folder,
-      folder,
-    }))
-    const extra = extraLists.filter((l) => l.folder !== '' && !folders.has(l.folder))
-    return [{ id: DODANE_LIST_ID, name: 'Dodane', folder: '' }, ...fromFiles, ...extra]
-  }, [textDocuments, extraLists])
+  const allDocLists = useMemo(() => buildDocLists(documents, extraLists), [documents, extraLists])
+  const docLists = useMemo(() => buildDocLists(currentTabDocuments, extraLists), [currentTabDocuments, extraLists])
   const areAllListsCollapsed =
     docLists.length > 0 && docLists.every((list) => collapsedListIds.includes(list.id))
 
   const filteredDocuments = useMemo(() => {
-    const source = fileListTab === 'images' ? imageDocuments : textDocuments
     const normalizedQuery = query.trim().toLowerCase()
     if (!normalizedQuery) {
-      return source
+      return currentTabDocuments
     }
 
-    return source.filter((document) =>
+    return currentTabDocuments.filter((document) =>
       `${document.name} ${document.id} ${document.document_type}`
         .toLowerCase()
         .includes(normalizedQuery),
     )
-  }, [fileListTab, imageDocuments, textDocuments, query])
+  }, [currentTabDocuments, query])
 
-  const filteredTextDocsByList = useMemo(() => {
+  const filteredDocsByList = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
     const result: Record<string, DocsFile[]> = {}
     docLists.forEach((list) => {
-      const listDocs = textDocuments.filter((doc) => {
-        const slashIdx = doc.id.lastIndexOf('/')
-        const folder = slashIdx === -1 ? '' : doc.id.slice(0, slashIdx)
+      const listDocs = currentTabDocuments.filter((doc) => {
+        const folder = getDocumentFolder(doc.id)
         const matchedList = docLists.find((l) => l.folder === folder)
         const effectiveListId = matchedList ? matchedList.id : DODANE_LIST_ID
         return effectiveListId === list.id
@@ -658,15 +875,53 @@ function App() {
         ? listDocs.filter((doc) =>
             `${doc.name} ${doc.id} ${doc.document_type}`.toLowerCase().includes(normalizedQuery),
           )
-        : listDocs
+          : listDocs
     })
     return result
-  }, [textDocuments, docLists, query])
+  }, [currentTabDocuments, docLists, query])
+
+  const galleryItems = useMemo(
+    () =>
+      docLists
+        .filter((list) => !collapsedListIds.includes(list.id))
+        .flatMap((list) => filteredDocsByList[list.id] ?? [])
+        .filter((d) => d.document_type === 'image'),
+    [collapsedListIds, docLists, filteredDocsByList],
+  )
+
+  useEffect(() => {
+    if (galleryIndex === null || galleryItems.length === 0) return
+    const handleKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setGalleryIndex(null)
+      else if (event.key === 'ArrowLeft') setGalleryIndex((i) => (i !== null && i > 0 ? i - 1 : i))
+      else if (event.key === 'ArrowRight')
+        setGalleryIndex((i) => (i !== null && i < galleryItems.length - 1 ? i + 1 : i))
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [galleryIndex, galleryItems.length])
 
   const selectedDocuments = useMemo(
     () => documents.filter((document) => selectedIds.has(document.id)),
     [documents, selectedIds],
   )
+  const selectedDocumentsInCurrentTab = useMemo(
+    () => currentTabDocuments.filter((document) => selectedIds.has(document.id)),
+    [currentTabDocuments, selectedIds],
+  )
+  const moveSelectedImageDocuments = useMemo(
+    () => imageDocuments.filter((document) => moveSelectedImageIds.has(document.id)),
+    [imageDocuments, moveSelectedImageIds],
+  )
+  const moveDocumentsInCurrentTab = useMemo(
+    () =>
+      fileListTab === 'images' && moveSelectedImageDocuments.length > 0
+        ? moveSelectedImageDocuments
+        : selectedDocumentsInCurrentTab,
+    [fileListTab, moveSelectedImageDocuments, selectedDocumentsInCurrentTab],
+  )
+  const displayedSelectedCount =
+    fileListTab === 'images' && moveSelectedImageIds.size > 0 ? moveSelectedImageIds.size : selectedIds.size
   const contextDocuments = useMemo(
     () =>
       findContextInFiles && selectedIds.size === 0
@@ -693,8 +948,26 @@ function App() {
         const availableIds = new Set(files.map((file) => file.id))
         return new Set([...currentSelection].filter((id) => availableIds.has(id)))
       })
+      setMoveSelectedImageIds((currentSelection) => {
+        const availableImageIds = new Set(
+          files
+            .filter((file) => file.document_type === 'image' || file.document_type === 'video')
+            .map((file) => file.id),
+        )
+        return new Set([...currentSelection].filter((id) => availableImageIds.has(id)))
+      })
+      // Sync counts from authoritative data, clear local optimistic tracking
+      const freshCounts: Record<string, number> = {}
+      for (const file of files) {
+        const folder = getDocumentFolder(file.id)
+        freshCounts[folder] = (freshCounts[folder] ?? 0) + 1
+      }
+      setListCounts(freshCounts)
+      localCountsDateRef.current = null
+      return files
     } catch (loadError) {
       setError(errorMessage(loadError, t.unexpectedError))
+      return null
     } finally {
       setIsLoadingDocs(false)
     }
@@ -744,6 +1017,9 @@ function App() {
         nextSelection.delete(documentId)
       } else {
         const doc = documents.find((d) => d.id === documentId)
+        if (doc?.document_type === 'video') {
+          return nextSelection
+        }
         if (doc?.document_type === 'image') {
           documents
             .filter((d) => d.document_type === 'image' && nextSelection.has(d.id))
@@ -757,19 +1033,67 @@ function App() {
 
   function selectAllVisible() {
     if (fileListTab === 'images') return
+    const expandedDocs = docLists
+      .filter((list) => !collapsedListIds.includes(list.id))
+      .flatMap((list) => filteredDocsByList[list.id] ?? [])
     setSelectedIds((currentSelection) => {
       const nextSelection = new Set(currentSelection)
-      filteredDocuments.forEach((document) => nextSelection.add(document.id))
+      expandedDocs.forEach((document) => nextSelection.add(document.id))
       return nextSelection
     })
   }
 
   function clearSelection() {
     setSelectedIds(new Set())
+    setMoveSelectedImageIds(new Set())
   }
 
-  async function uploadDocuments(fileList: FileList | null) {
-    const files = Array.from(fileList ?? [])
+  function selectImagesForMove() {
+    const expandedDocs = docLists
+      .filter((list) => !collapsedListIds.includes(list.id))
+      .flatMap((list) => filteredDocsByList[list.id] ?? [])
+    setMoveSelectedImageIds(new Set(expandedDocs.map((document) => document.id)))
+  }
+
+  function openGalleryAt(index: number) {
+    setGalleryIndex(index)
+  }
+
+  function closeGalleryModal() {
+    setGalleryIndex(null)
+  }
+
+  function toggleListSelection(listDocs: DocsFile[]) {
+    if (fileListTab === 'images') {
+      const imageDocs = listDocs.filter((d) => d.document_type === 'image')
+      if (!imageDocs.length) return
+      const allSelected = imageDocs.every((d) => moveSelectedImageIds.has(d.id))
+      setMoveSelectedImageIds((prev) => {
+        const next = new Set(prev)
+        if (allSelected) {
+          imageDocs.forEach((d) => next.delete(d.id))
+        } else {
+          imageDocs.forEach((d) => next.add(d.id))
+        }
+        return next
+      })
+    } else {
+      const selectableDocs = listDocs.filter((d) => d.document_type !== 'video')
+      if (!selectableDocs.length) return
+      const allSelected = selectableDocs.every((d) => selectedIds.has(d.id))
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        if (allSelected) {
+          selectableDocs.forEach((d) => next.delete(d.id))
+        } else {
+          selectableDocs.forEach((d) => next.add(d.id))
+        }
+        return next
+      })
+    }
+  }
+
+  async function uploadFiles(files: File[]) {
     if (!files.length || isUploading) {
       return
     }
@@ -777,35 +1101,107 @@ function App() {
     setIsUploading(true)
     setError('')
 
-    try {
-      const formData = new FormData()
-      files.forEach((file) => formData.append('files', file))
-      formData.append('embed', embedUploads ? 'true' : 'false')
+    const batches: File[][] = []
+    for (let i = 0; i < files.length; i += UPLOAD_BATCH_SIZE) {
+      batches.push(files.slice(i, i + UPLOAD_BATCH_SIZE))
+    }
+    const totalBatches = batches.length
+    const totalFiles = files.length
 
-      const response = await fetch(`${API_BASE_URL}/api/docs/files`, {
-        method: 'POST',
-        body: formData,
-      })
-      const data = (await response.json()) as DocsUploadResponse
-      if (!response.ok) {
-        throw new Error(readApiError(data.detail, t.uploadFilesError))
+    let allUploadedFiles: DocsFile[] = []
+    let uploadedCount = 0
+    const failedFiles: File[] = []
+    const errors: string[] = []
+
+    try {
+      for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+        const batch = batches[batchIndex]
+        setUploadSnackbar({
+          kind: 'loading',
+          text:
+            totalBatches === 1
+              ? t.uploadFilesProcessing(totalFiles)
+              : t.uploadBatchProgress(batchIndex + 1, totalBatches, uploadedCount, totalFiles),
+        })
+
+        try {
+          const formData = new FormData()
+          batch.forEach((file) => formData.append('files', file))
+          formData.append('embed', embedUploads ? 'true' : 'false')
+
+          const response = await fetch(`${API_BASE_URL}/api/docs/files`, {
+            method: 'POST',
+            body: formData,
+          })
+          const data = (await response.json()) as DocsUploadResponse
+          if (!response.ok) {
+            throw new Error(readApiError(data.detail, t.uploadFilesError))
+          }
+
+          const batchFiles = Array.isArray(data.files) ? data.files : []
+          allUploadedFiles = [...allUploadedFiles, ...batchFiles]
+          // Optimistic count update: uploaded files land in root folder
+          if (batchFiles.length > 0) {
+            localCountsDateRef.current = new Date().toISOString()
+            setListCounts((prev) => ({
+              ...prev,
+              '': (prev[''] ?? 0) + batchFiles.length,
+            }))
+          }
+        } catch (batchError) {
+          errors.push(errorMessage(batchError, t.unexpectedError))
+          failedFiles.push(...batch)
+        }
+        uploadedCount += batch.length
       }
 
       await loadDocuments()
-      const uploadedFiles = Array.isArray(data.files) ? data.files : []
+
+      if (
+        allUploadedFiles.length > 0 &&
+        allUploadedFiles.every((file) => file.document_type === 'image' || file.document_type === 'video')
+      ) {
+        setFileListTab('images')
+      }
       setSelectedIds((currentSelection) => {
         const nextSelection = new Set(currentSelection)
-        uploadedFiles.forEach((file) => nextSelection.add(file.id))
+        allUploadedFiles
+          .filter((file) => file.document_type !== 'video')
+          .forEach((file) => nextSelection.add(file.id))
         return nextSelection
       })
+
+      if (errors.length > 0) {
+        const retrySnapshot = [...failedFiles]
+        const successPart =
+          allUploadedFiles.length > 0 ? `${t.uploadFilesSuccess(allUploadedFiles.length)} ` : ''
+        const msg = `${successPart}${t.uploadBatchFailed(failedFiles.length, errors[0])}`
+        setError(allUploadedFiles.length === 0 ? errors[0] : '')
+        setUploadSnackbar({
+          kind: 'error',
+          text: msg,
+          onRetry: () => uploadFiles(retrySnapshot),
+        })
+      } else {
+        setUploadSnackbar({
+          kind: 'success',
+          text: t.uploadFilesSuccess(allUploadedFiles.length || files.length),
+        })
+      }
     } catch (uploadError) {
-      setError(errorMessage(uploadError, t.unexpectedError))
+      const message = errorMessage(uploadError, t.unexpectedError)
+      setError(message)
+      setUploadSnackbar({ kind: 'error', text: message })
     } finally {
       setIsUploading(false)
       if (uploadInputRef.current) {
         uploadInputRef.current.value = ''
       }
     }
+  }
+
+  async function uploadDocuments(fileList: FileList | null) {
+    await uploadFiles(Array.from(fileList ?? []))
   }
 
   async function archiveDocument(documentFile: DocsFile) {
@@ -829,7 +1225,19 @@ function App() {
       setDocuments((currentDocuments) =>
         currentDocuments.filter((document) => document.id !== documentFile.id),
       )
+      // Optimistic count update: decrement the archived file's folder
+      const archivedFolder = getDocumentFolder(documentFile.id)
+      localCountsDateRef.current = new Date().toISOString()
+      setListCounts((prev) => ({
+        ...prev,
+        [archivedFolder]: Math.max(0, (prev[archivedFolder] ?? 0) - 1),
+      }))
       setSelectedIds((currentSelection) => {
+        const nextSelection = new Set(currentSelection)
+        nextSelection.delete(documentFile.id)
+        return nextSelection
+      })
+      setMoveSelectedImageIds((currentSelection) => {
         const nextSelection = new Set(currentSelection)
         nextSelection.delete(documentFile.id)
         return nextSelection
@@ -915,6 +1323,16 @@ function App() {
           ),
         )
         setSelectedIds((currentSelection) => {
+          if (!currentSelection.has(documentFile.id)) {
+            return currentSelection
+          }
+
+          const nextSelection = new Set(currentSelection)
+          nextSelection.delete(documentFile.id)
+          nextSelection.add((data.file as DocsFile).id)
+          return nextSelection
+        })
+        setMoveSelectedImageIds((currentSelection) => {
           if (!currentSelection.has(documentFile.id)) {
             return currentSelection
           }
@@ -1034,7 +1452,9 @@ function App() {
       mode === 'embedding_search'
         ? []
         : mode === 'source_search' && selectedFiles.length === 0
-          ? documents.filter((d) => d.document_type !== 'image').map((document) => document.id)
+          ? documents
+              .filter((d) => d.document_type !== 'image' && d.document_type !== 'video')
+              .map((document) => document.id)
           : selectedFiles
 
     if (!prompt.trim() || (mode === 'chat' && !files.length) || isAsking) {
@@ -1171,11 +1591,11 @@ function App() {
     }
   }
 
-  async function transcribeAudio(audioBlob: Blob) {
+  async function transcribeAudio(audioBlob: Blob, filename = 'recording.webm') {
     setIsTranscribing(true)
     try {
       const formData = new FormData()
-      formData.append('file', audioBlob, 'recording.webm')
+      formData.append('file', audioBlob, filename)
       formData.append('model', 'whisper-1')
       const response = await fetch(`${API_BASE_URL}/v1/audio/transcriptions`, {
         method: 'POST',
@@ -1193,6 +1613,21 @@ function App() {
       setError(errorMessage(transcribeError, t.unexpectedError))
     } finally {
       setIsTranscribing(false)
+    }
+  }
+
+  async function uploadPromptAudio(fileList: FileList | null) {
+    const file = fileList?.[0]
+    if (!file) {
+      return
+    }
+
+    try {
+      await transcribeAudio(file, file.name || 'recording.webm')
+    } finally {
+      if (promptAudioInputRef.current) {
+        promptAudioInputRef.current.value = ''
+      }
     }
   }
 
@@ -1231,9 +1666,10 @@ function App() {
     const trimmedName = name.trim()
     if (!trimmedName) return
     const folder = trimmedName
-    // Only add if not already derived from files
     setExtraLists((current) => {
-      if (current.find((l) => l.folder === folder)) return current
+      if (allDocLists.find((l) => l.folder === folder) || current.find((l) => l.folder === folder)) {
+        return current
+      }
       const id = typeof crypto.randomUUID === 'function'
         ? crypto.randomUUID()
         : `list-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -1256,7 +1692,13 @@ function App() {
   }
 
   function openMoveModal(documentFile: DocsFile) {
-    setMoveCandidate(documentFile)
+    setMoveCandidates([documentFile])
+    setMoveError('')
+  }
+
+  function openMoveSelectedModal() {
+    if (!moveDocumentsInCurrentTab.length) return
+    setMoveCandidates(moveDocumentsInCurrentTab)
     setMoveError('')
   }
 
@@ -1272,46 +1714,134 @@ function App() {
 
   function closeMoveModal() {
     if (isMoveLoading) return
-    setMoveCandidate(null)
+    setMoveCandidates(null)
     setMoveError('')
   }
 
-  async function moveFileToList(file: DocsFile, list: DocList) {
-    if (isMoveLoading) return
+  async function moveFilesToList(files: DocsFile[], list: DocList) {
+    if (isMoveLoading || files.length === 0) return
+
     setIsMoveLoading(true)
     setMoveError('')
+    const movedFiles: Array<{ fromId: string; updatedFile: DocsFile; wasSelected: boolean }> = []
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/docs/files/${encodeDocumentId(file.id)}/move`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ folder: list.folder }),
-        },
-      )
-      const data = (await response.json()) as DocsFileActionResponse
-      if (!response.ok) {
-        throw new Error(readApiError(data.detail, t.unexpectedError))
-      }
-      if (data.file) {
-        const updatedFile = data.file as DocsFile
-        setDocuments((current) =>
-          current.map((d) => (d.id === file.id ? updatedFile : d)),
+      for (const file of files) {
+        const response = await fetch(
+          `${API_BASE_URL}/api/docs/files/${encodeDocumentId(file.id)}/move`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder: list.folder }),
+          },
         )
+        const data = (await response.json()) as DocsFileActionResponse
+        if (!response.ok) {
+          throw new Error(readApiError(data.detail, t.unexpectedError))
+        }
+        if (!data.file) {
+          await loadDocuments()
+          setMoveCandidates(null)
+          return
+        }
+
+        movedFiles.push({
+          fromId: file.id,
+          updatedFile: data.file as DocsFile,
+          wasSelected: selectedIds.has(file.id),
+        })
+      }
+
+      if (movedFiles.length > 0) {
+        const movedFilesMap = new Map(movedFiles.map((item) => [item.fromId, item.updatedFile]))
+
+        // Collect source folders that might become empty after the move
+        const sourceFolders = new Set(
+          movedFiles.map(({ fromId }) => getDocumentFolder(fromId)).filter(Boolean),
+        )
+
+        setDocuments((current) => {
+          const updated = current.map((document) => movedFilesMap.get(document.id) ?? document)
+
+          // Any source folder that no longer has any file in it must be preserved
+          const nowEmpty = [...sourceFolders].filter(
+            (folder) => !updated.some((d) => getDocumentFolder(d.id) === folder),
+          )
+          if (nowEmpty.length > 0) {
+            setExtraLists((prev) => {
+              const existingFolders = new Set(prev.map((l) => l.folder))
+              const toAdd: DocList[] = nowEmpty
+                .filter((folder) => !existingFolders.has(folder))
+                .map((folder) => ({ id: folder, name: folder, folder }))
+              return toAdd.length > 0 ? [...prev, ...toAdd] : prev
+            })
+          }
+
+          return updated
+        })
+
         setSelectedIds((current) => {
-          if (!current.has(file.id)) return current
           const next = new Set(current)
-          next.delete(file.id)
-          next.add(updatedFile.id)
+          movedFiles.forEach(({ fromId, updatedFile, wasSelected }) => {
+            next.delete(fromId)
+            if (wasSelected) {
+              next.add(updatedFile.id)
+            }
+          })
+            return next
+        })
+
+        // Optimistic count update: adjust counts for source → target moves
+        localCountsDateRef.current = new Date().toISOString()
+        setListCounts((prev) => {
+          const updated = { ...prev }
+          movedFiles.forEach(({ fromId, updatedFile }) => {
+            const srcFolder = getDocumentFolder(fromId)
+            const dstFolder = getDocumentFolder(updatedFile.id)
+            if (srcFolder !== dstFolder) {
+              updated[srcFolder] = Math.max(0, (updated[srcFolder] ?? 0) - 1)
+              updated[dstFolder] = (updated[dstFolder] ?? 0) + 1
+            }
+          })
+          return updated
+        })
+      }
+
+      setMoveSelectedImageIds(new Set())
+      setExtraLists((current) => current.filter((l) => l.folder !== list.folder))
+      setMoveCandidates(null)
+    } catch (err) {
+      if (movedFiles.length > 0) {
+        const freshFiles = await loadDocuments()
+        setSelectedIds((current) => {
+          const next = new Set(current)
+          movedFiles.forEach(({ fromId, updatedFile, wasSelected }) => {
+            next.delete(fromId)
+            if (wasSelected) {
+              next.add(updatedFile.id)
+            }
+          })
           return next
         })
-        // Remove from extraLists — folder now exists for real via file structure
+        // Preserve any source list that became empty on the server
+        if (freshFiles) {
+          const sourceFolders = new Set(
+            movedFiles.map(({ fromId }) => getDocumentFolder(fromId)).filter(Boolean),
+          )
+          const nowEmpty = [...sourceFolders].filter(
+            (folder) => !freshFiles.some((d) => getDocumentFolder(d.id) === folder),
+          )
+          if (nowEmpty.length > 0) {
+            setExtraLists((prev) => {
+              const existingFolders = new Set(prev.map((l) => l.folder))
+              const toAdd: DocList[] = nowEmpty
+                .filter((folder) => !existingFolders.has(folder))
+                .map((folder) => ({ id: folder, name: folder, folder }))
+              return toAdd.length > 0 ? [...prev, ...toAdd] : prev
+            })
+          }
+        }
         setExtraLists((current) => current.filter((l) => l.folder !== list.folder))
-      } else {
-        await loadDocuments()
       }
-      setMoveCandidate(null)
-    } catch (err) {
       setMoveError(errorMessage(err, t.unexpectedError))
     } finally {
       setIsMoveLoading(false)
@@ -1372,13 +1902,14 @@ function App() {
               </button>
               <div>
                 <h2 id="files-heading">{t.filesHeading}</h2>
-                {isFilesExpanded ? <p>{t.selected(selectedIds.size)}</p> : null}
+                {isFilesExpanded ? <p>{t.selected(displayedSelectedCount)}</p> : null}
               </div>
             </div>
             {isFilesExpanded ? (
               <div className="button-row">
                 <div className="buttons">
                   <input
+                    id={uploadInputId}
                     ref={uploadInputRef}
                     className="upload-input"
                     type="file"
@@ -1386,15 +1917,19 @@ function App() {
                     accept={DOCUMENT_UPLOAD_ACCEPT}
                     onChange={(event) => void uploadDocuments(event.target.files)}
                   />
-                    <button
-                      className="upload-button"
-                      type="button"
-                      onClick={() => uploadInputRef.current?.click()}
-                      disabled={isUploading}
+                    <label
+                      className={`upload-button${isUploading ? ' is-disabled' : ''}`}
+                      htmlFor={uploadInputId}
+                      aria-disabled={isUploading}
+                      onClick={(event) => {
+                        if (isUploading) {
+                          event.preventDefault()
+                        }
+                      }}
                     >
                       {isUploading ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
                       {isUploading ? (embedUploads ? t.embeddingFiles : t.uploadingFiles) : t.addFiles}
-                    </button>
+                    </label>
                   <label className="embed-option">
                     <input
                       type="checkbox"
@@ -1406,15 +1941,63 @@ function App() {
                   </label>
                 </div>
 
-               <div className="buttons">
-                  <button type="button" onClick={selectAllVisible} disabled={!filteredDocuments.length || fileListTab === 'images'}>
-                    <CheckSquare size={16} />
-                    {t.selectAll}
-                  </button>
-                  <button type="button" onClick={clearSelection} disabled={!selectedIds.size}>
-                    <Square size={16} />
-                    {t.clear}
-                  </button>
+                <div className="buttons">
+                  {fileListTab === 'images' ? (
+                    <OverflowMenu showLabel items={[
+                      {
+                        key: 'select',
+                        icon: <CheckSquare size={14} />,
+                        label: t.selectImages,
+                        onClick: selectImagesForMove,
+                        disabled: !filteredDocuments.length,
+                      },
+                      {
+                        key: 'gallery',
+                        icon: <Images size={14} />,
+                        label: t.gallery,
+                        onClick: () => openGalleryAt(0),
+                        disabled: !galleryItems.length,
+                      },
+                      {
+                        key: 'move',
+                        icon: <ArrowRightFromLine size={14} />,
+                        label: t.moveSelected,
+                        onClick: openMoveSelectedModal,
+                        disabled: !moveDocumentsInCurrentTab.length || allDocLists.length <= 1 || Boolean(editingDocumentId),
+                      },
+                      {
+                        key: 'clear',
+                        icon: <Square size={14} />,
+                        label: t.clear,
+                        onClick: clearSelection,
+                        disabled: !selectedIds.size,
+                      },
+                    ]} />
+                  ) : (
+                    <OverflowMenu showLabel items={[
+                      {
+                        key: 'select',
+                        icon: <CheckSquare size={14} />,
+                        label: t.selectAll,
+                        onClick: selectAllVisible,
+                        disabled: !filteredDocuments.length,
+                      },
+                      {
+                        key: 'move',
+                        icon: <ArrowRightFromLine size={14} />,
+                        label: t.moveSelected,
+                        onClick: openMoveSelectedModal,
+                        disabled: !moveDocumentsInCurrentTab.length || allDocLists.length <= 1 || Boolean(editingDocumentId),
+                      },
+                      {
+                        key: 'clear',
+                        icon: <Square size={14} />,
+                        label: t.clear,
+                        onClick: clearSelection,
+                        disabled: !selectedIds.size,
+                      },
+                    ]} />
+                  )}
                 </div>
               </div>
             ) : null}
@@ -1442,31 +2025,29 @@ function App() {
                   <span className="tab-count">{imageDocuments.length}</span>
                 </button>
               </div>
-              {fileListTab === 'text' ? (
-                <div className="button-row list-actions-row">
-                  <div className="buttons">
-                    <button
-                      type="button"
-                      className="list-groups-button"
-                      onClick={toggleAllListGroups}
-                    >
-                      {areAllListsCollapsed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      {areAllListsCollapsed ? t.expandAllLists : t.collapseAllLists}
-                    </button>
-                  </div>
-                  <div className="buttons">
-                    <button
-                      type="button"
-                      className="new-list-button"
-                      onClick={() => { setIsCreatingList(true); setNewListName('') }}
-                      disabled={isCreatingList}
-                    >
-                      <FolderPlus size={14} />
-                      {t.newList}
-                    </button>
-                  </div>
+              <div className="button-row list-actions-row">
+                <div className="buttons">
+                  <button
+                    type="button"
+                    className="list-groups-button"
+                    onClick={toggleAllListGroups}
+                  >
+                    {areAllListsCollapsed ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    {areAllListsCollapsed ? t.expandAllLists : t.collapseAllLists}
+                  </button>
                 </div>
-              ) : null}
+                <div className="buttons">
+                  <button
+                    type="button"
+                    className="new-list-button"
+                    onClick={() => { setIsCreatingList(true); setNewListName('') }}
+                    disabled={isCreatingList}
+                  >
+                    <FolderPlus size={14} />
+                    {t.newList}
+                  </button>
+                </div>
+              </div>
               <label className="search-field">
                 <Search size={18} />
                 <input
@@ -1477,7 +2058,7 @@ function App() {
                 />
               </label>
 
-              {fileListTab === 'text' && isCreatingList ? (
+              {isCreatingList ? (
                 <div className="new-list-form">
                   <input
                     autoFocus
@@ -1501,267 +2082,195 @@ function App() {
                     {t.cancelCreateList}
                   </button>
                 </div>
-              ) : null}
-
-              <div className="file-list" role="list">
-                {isLoadingDocs ? (
-                  <StatusLine icon={<Loader2 className="spin" size={18} />} text={t.loadingFiles} />
                 ) : null}
 
-                {fileListTab === 'images' ? (
-                  <>
-                    {!isLoadingDocs && !filteredDocuments.length ? (
-                      <StatusLine icon={<ImageIcon size={18} />} text={t.noImageFiles} />
-                    ) : null}
+                <div className="file-list" role="list">
+                  {isLoadingDocs ? (
+                    <StatusLine icon={<Loader2 className="spin" size={18} />} text={t.loadingFiles} />
+                  ) : null}
 
-                    {filteredDocuments.map((document) => {
-                      const isEditing = editingDocumentId === document.id
-                      const { suffix } = splitDocumentName(document.name)
-                      const canSaveRename =
-                        Boolean(renameValue.trim()) &&
-                        renameValue.trim() !== splitDocumentName(document.name).stem &&
-                        renamingId !== document.id
-
+                  {!isLoadingDocs && !currentTabDocuments.length && docLists.length === 1 ? (
+                    <StatusLine
+                      icon={fileListTab === 'images' ? <ImageIcon size={18} /> : <FileText size={18} />}
+                      text={fileListTab === 'images' ? t.noImageFiles : t.noTextFiles}
+                    />
+                  ) : (
+                    docLists.map((list) => {
+                      const listDocs = filteredDocsByList[list.id] ?? []
+                      const isListCollapsed = collapsedListIds.includes(list.id)
+                      const selectableDocs =
+                        fileListTab === 'images'
+                          ? listDocs.filter((d) => d.document_type === 'image')
+                          : listDocs.filter((d) => d.document_type !== 'video')
+                      const selectedCountInList =
+                        fileListTab === 'images'
+                          ? selectableDocs.filter((d) => moveSelectedImageIds.has(d.id)).length
+                          : selectableDocs.filter((d) => selectedIds.has(d.id)).length
+                      const isListFullySelected =
+                        selectableDocs.length > 0 && selectedCountInList === selectableDocs.length
+                      const isListPartiallySelected =
+                        selectedCountInList > 0 && selectedCountInList < selectableDocs.length
                       return (
-                        <article className="file-row" key={document.id} role="listitem">
-                          <input
-                            type="checkbox"
-                            checked={selectedIds.has(document.id)}
-                            onChange={() => toggleDocument(document.id)}
-                            disabled={isEditing || renamingId === document.id}
-                            aria-label={document.name}
-                          />
-                          <DocumentTypeIcon documentType={document.document_type} />
-                          {isEditing ? (
-                            <label className="rename-field">
-                              <input
-                                autoFocus
-                                value={renameValue}
-                                onChange={(event) => setRenameValue(event.target.value)}
-                                onKeyDown={(event) => handleRenameKeyDown(event, document)}
-                                aria-label={`${t.renameFileAria}: ${document.name}`}
-                              />
-                              <span>{suffix}</span>
-                            </label>
-                          ) : (
-                            <span className="file-copy">
-                              <strong>{document.name}</strong>
-                              <span>
-                                {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
-                                {formatBytes(document.size_bytes)}
-                              </span>
-                            </span>
-                          )}
-                          <span className="file-actions">
-                            {isEditing ? (
-                              <>
-                                <button
-                                  className="file-cancel"
-                                  type="button"
-                                  onClick={cancelRenamingDocument}
-                                  disabled={renamingId === document.id}
-                                  title={t.cancelRenameTitle}
-                                  aria-label={`${t.cancelRenameAria}: ${document.name}`}
-                                >
-                                  <CircleX size={16} />
-                                </button>
-                                <button
-                                  className="file-confirm"
-                                  type="button"
-                                  onClick={() => void renameDocument(document)}
-                                  disabled={!canSaveRename}
-                                  title={t.saveRenameTitle}
-                                  aria-label={`${t.saveRenameAria}: ${document.name}`}
-                                >
-                                  {renamingId === document.id ? (
-                                    <Loader2 className="spin" size={16} />
-                                  ) : (
-                                    <CircleCheck size={16} />
-                                  )}
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  className="file-rename"
-                                  type="button"
-                                  onClick={() => startRenamingDocument(document)}
-                                  disabled={renamingId === document.id || Boolean(editingDocumentId)}
-                                  title={t.renameFileTitle}
-                                  aria-label={`${t.renameFileAria}: ${document.name}`}
-                                >
-                                  <Pencil size={15} />
-                                </button>
-                                <button
-                                  className="file-archive"
-                                  type="button"
-                                  onClick={() => void archiveDocument(document)}
-                                  disabled={archivingId === document.id || Boolean(editingDocumentId)}
-                                  title={t.archiveFileTitle}
-                                  aria-label={`${t.archiveFileAria}: ${document.name}`}
-                                >
-                                  {archivingId === document.id ? (
-                                    <Loader2 className="spin" size={15} />
-                                  ) : (
-                                    <Trash2 size={15} />
-                                  )}
-                                </button>
-                              </>
-                            )}
-                          </span>
-                        </article>
-                      )
-                    })}
-                  </>
-                ) : (
-                  docLists.map((list) => {
-                    const listDocs = filteredTextDocsByList[list.id] ?? []
-                    const isListCollapsed = collapsedListIds.includes(list.id)
-                    return (
-                      <section
-                        key={list.id}
-                        className={`file-list-group${isListCollapsed ? ' is-collapsed' : ''}`}
-                        aria-labelledby={`list-heading-${list.id}`}
-                      >
-                        <div className="list-group-header">
-                          <div className="list-group-title">
-                            <h4 id={`list-heading-${list.id}`}>{list.name}</h4>
-                            <span>{listDocs.length}</span>
+                        <section
+                          key={list.id}
+                          className={`file-list-group${isListCollapsed ? ' is-collapsed' : ''}`}
+                          aria-labelledby={`list-heading-${list.id}`}
+                        >
+                          <div className="list-group-header">
+                            <IndeterminateCheckbox
+                              checked={isListFullySelected}
+                              indeterminate={isListPartiallySelected}
+                              onChange={() => toggleListSelection(listDocs)}
+                              title={`${t.selectList}: ${list.name}`}
+                              aria-label={`${t.selectList}: ${list.name}`}
+                              className="list-select-checkbox"
+                            />
+                            <div className="list-group-title">
+                              <h4 id={`list-heading-${list.id}`}>{list.name}</h4>
+                              <span>{isLoadingDocs ? (listCounts[list.folder] ?? listDocs.length) : listDocs.length}</span>
+                            </div>
+                            <button
+                              className="collapse-toggle list-group-toggle"
+                              type="button"
+                              onClick={() => toggleListCollapsed(list.id)}
+                              aria-expanded={!isListCollapsed}
+                              aria-controls={`list-content-${list.id}`}
+                              title={isListCollapsed ? t.expandSection(list.name) : t.collapseSection(list.name)}
+                              aria-label={isListCollapsed ? t.expandSection(list.name) : t.collapseSection(list.name)}
+                            >
+                              {isListCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+                            </button>
                           </div>
-                          <button
-                            className="collapse-toggle list-group-toggle"
-                            type="button"
-                            onClick={() => toggleListCollapsed(list.id)}
-                            aria-expanded={!isListCollapsed}
-                            aria-controls={`list-content-${list.id}`}
-                            title={isListCollapsed ? t.expandSection(list.name) : t.collapseSection(list.name)}
-                            aria-label={isListCollapsed ? t.expandSection(list.name) : t.collapseSection(list.name)}
-                          >
-                            {isListCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-                          </button>
-                        </div>
 
-                        {!isListCollapsed ? (
-                          <div id={`list-content-${list.id}`}>
-                            {!isLoadingDocs && listDocs.length === 0 ? (
-                              <StatusLine icon={<FileText size={18} />} text={t.emptyList} />
-                            ) : null}
+                          {!isListCollapsed ? (
+                            <div id={`list-content-${list.id}`}>
+                              {!isLoadingDocs && listDocs.length === 0 ? (
+                                <StatusLine
+                                  icon={fileListTab === 'images' ? <ImageIcon size={18} /> : <FileText size={18} />}
+                                  text={t.emptyList}
+                                />
+                              ) : null}
 
-                            {listDocs.map((document) => {
-                              const isEditing = editingDocumentId === document.id
-                              const { suffix } = splitDocumentName(document.name)
-                              const canSaveRename =
-                                Boolean(renameValue.trim()) &&
-                                renameValue.trim() !== splitDocumentName(document.name).stem &&
-                                renamingId !== document.id
+                              {listDocs.map((document) => {
+                                const isEditing = editingDocumentId === document.id
+                                const { suffix } = splitDocumentName(document.name)
+                                const canSaveRename =
+                                  Boolean(renameValue.trim()) &&
+                                  renameValue.trim() !== splitDocumentName(document.name).stem &&
+                                  renamingId !== document.id
 
-                              return (
-                                <article className="file-row" key={document.id} role="listitem">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedIds.has(document.id)}
-                                    onChange={() => toggleDocument(document.id)}
-                                    disabled={isEditing || renamingId === document.id}
-                                    aria-label={document.name}
-                                  />
-                                  <DocumentTypeIcon documentType={document.document_type} />
-                                  {isEditing ? (
-                                    <label className="rename-field">
-                                      <input
-                                        autoFocus
-                                        value={renameValue}
-                                        onChange={(event) => setRenameValue(event.target.value)}
-                                        onKeyDown={(event) => handleRenameKeyDown(event, document)}
-                                        aria-label={`${t.renameFileAria}: ${document.name}`}
-                                      />
-                                      <span>{suffix}</span>
-                                    </label>
-                                  ) : (
-                                    <span className="file-copy">
-                                      <strong>{document.name}</strong>
-                                      <span>
-                                        {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
-                                        {formatBytes(document.size_bytes)}
-                                      </span>
-                                    </span>
-                                  )}
-                                  <span className="file-actions">
+                                return (
+                                  <article className="file-row" key={document.id} role="listitem">
+                                    <input
+                                      type="checkbox"
+                                      checked={document.document_type !== 'video' && selectedIds.has(document.id)}
+                                      onChange={() => toggleDocument(document.id)}
+                                      disabled={document.document_type === 'video' || isEditing || renamingId === document.id}
+                                      aria-label={document.name}
+                                    />
+                                    <DocumentTypeIcon documentType={document.document_type} />
                                     {isEditing ? (
-                                      <>
-                                        <button
-                                          className="file-cancel"
-                                          type="button"
-                                          onClick={cancelRenamingDocument}
-                                          disabled={renamingId === document.id}
-                                          title={t.cancelRenameTitle}
-                                          aria-label={`${t.cancelRenameAria}: ${document.name}`}
-                                        >
-                                          <CircleX size={16} />
-                                        </button>
-                                        <button
-                                          className="file-confirm"
-                                          type="button"
-                                          onClick={() => void renameDocument(document)}
-                                          disabled={!canSaveRename}
-                                          title={t.saveRenameTitle}
-                                          aria-label={`${t.saveRenameAria}: ${document.name}`}
-                                        >
-                                          {renamingId === document.id ? (
-                                            <Loader2 className="spin" size={16} />
-                                          ) : (
-                                            <CircleCheck size={16} />
-                                          )}
-                                        </button>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <button
-                                          className="file-move"
-                                          type="button"
-                                          onClick={() => openMoveModal(document)}
-                                          disabled={docLists.length <= 1 || Boolean(editingDocumentId)}
-                                          title={t.moveFileTitle}
-                                          aria-label={`${t.moveFileAria}: ${document.name}`}
-                                        >
-                                          <ArrowRightFromLine size={15} />
-                                        </button>
-                                        <button
-                                          className="file-rename"
-                                          type="button"
-                                          onClick={() => startRenamingDocument(document)}
-                                          disabled={renamingId === document.id || Boolean(editingDocumentId)}
-                                          title={t.renameFileTitle}
+                                      <label className="rename-field">
+                                        <input
+                                          autoFocus
+                                          value={renameValue}
+                                          onChange={(event) => setRenameValue(event.target.value)}
+                                          onKeyDown={(event) => handleRenameKeyDown(event, document)}
                                           aria-label={`${t.renameFileAria}: ${document.name}`}
-                                        >
-                                          <Pencil size={15} />
-                                        </button>
-                                        <button
-                                          className="file-archive"
-                                          type="button"
-                                          onClick={() => void archiveDocument(document)}
-                                          disabled={archivingId === document.id || Boolean(editingDocumentId)}
-                                          title={t.archiveFileTitle}
-                                          aria-label={`${t.archiveFileAria}: ${document.name}`}
-                                        >
-                                          {archivingId === document.id ? (
-                                            <Loader2 className="spin" size={15} />
-                                          ) : (
-                                            <Trash2 size={15} />
-                                          )}
-                                        </button>
-                                      </>
+                                        />
+                                        <span>{suffix}</span>
+                                      </label>
+                                    ) : (
+                                      <span className="file-copy">
+                                        <strong>{document.name}</strong>
+                                        <span>
+                                          {document.id} - {formatDocumentType(document.document_type, language)} -{' '}
+                                          {formatBytes(document.size_bytes)}
+                                        </span>
+                                      </span>
                                     )}
-                                  </span>
-                                </article>
-                              )
-                            })}
-                          </div>
-                        ) : null}
-                      </section>
-                    )
-                  })
-                )}
-              </div>
+                                    <span className="file-actions">
+                                      {isEditing ? (
+                                        <>
+                                          <button
+                                            className="file-cancel"
+                                            type="button"
+                                            onClick={cancelRenamingDocument}
+                                            disabled={renamingId === document.id}
+                                            title={t.cancelRenameTitle}
+                                            aria-label={`${t.cancelRenameAria}: ${document.name}`}
+                                          >
+                                            <CircleX size={16} />
+                                          </button>
+                                          <button
+                                            className="file-confirm"
+                                            type="button"
+                                            onClick={() => void renameDocument(document)}
+                                            disabled={!canSaveRename}
+                                            title={t.saveRenameTitle}
+                                            aria-label={`${t.saveRenameAria}: ${document.name}`}
+                                          >
+                                            {renamingId === document.id ? (
+                                              <Loader2 className="spin" size={16} />
+                                            ) : (
+                                              <CircleCheck size={16} />
+                                            )}
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <OverflowMenu items={[
+                                          ...(document.document_type === 'image' ? [{
+                                            key: 'preview',
+                                            icon: <Eye size={14} />,
+                                            label: t.previewImage,
+                                            onClick: () => {
+                                              const idx = galleryItems.findIndex((d) => d.id === document.id)
+                                              if (idx >= 0) openGalleryAt(idx)
+                                            },
+                                          }] : []),
+                                          ...(document.document_type === 'pdf' ? [{
+                                            key: 'open-pdf',
+                                            icon: <ExternalLink size={14} />,
+                                            label: t.openPdf,
+                                            onClick: () => window.open(fileContentUrl(document.id), '_blank', 'noopener'),
+                                          }] : []),
+                                          {
+                                            key: 'move',
+                                            icon: <ArrowRightFromLine size={14} />,
+                                            label: t.moveFileTitle,
+                                            onClick: () => openMoveModal(document),
+                                            disabled: allDocLists.length <= 1 || Boolean(editingDocumentId),
+                                          },
+                                          {
+                                            key: 'rename',
+                                            icon: <Pencil size={14} />,
+                                            label: t.renameFileTitle,
+                                            onClick: () => startRenamingDocument(document),
+                                            disabled: Boolean(editingDocumentId),
+                                          },
+                                          {
+                                            key: 'archive',
+                                            icon: archivingId === document.id
+                                              ? <Loader2 className="spin" size={14} />
+                                              : <Trash2 size={14} />,
+                                            label: t.archiveFileTitle,
+                                            onClick: () => void archiveDocument(document),
+                                            disabled: archivingId === document.id || Boolean(editingDocumentId),
+                                            className: 'danger',
+                                          },
+                                        ]} />
+                                      )}
+                                    </span>
+                                  </article>
+                                )
+                              })}
+                            </div>
+                          ) : null}
+                        </section>
+                      )
+                    })
+                  )}
+                </div>
 
               <section className="archive-section" aria-labelledby="archive-heading">
                 <div className="archive-header">
@@ -1824,22 +2333,42 @@ function App() {
                   <h2 id="question-heading">{t.questionHeading}</h2>
                   <p>{t.filesInContext(contextDocuments.length)}</p>
                 </div>
-                <button
-                  className={`icon-button small record-button${isRecording ? ' recording' : ''}`}
-                  type="button"
-                  onClick={() => void toggleRecording()}
-                  title={isRecording ? t.stopRecording : t.startRecording}
-                  aria-label={isRecording ? t.stopRecording : t.startRecording}
-                  disabled={isTranscribing}
-                >
-                  {isTranscribing ? (
-                    <Loader2 className="spin" size={16} />
-                  ) : isRecording ? (
-                    <MicOff size={16} />
-                  ) : (
-                    <Mic size={16} />
-                  )}
-                </button>
+                <input
+                  id={promptAudioInputId}
+                  ref={promptAudioInputRef}
+                  className="upload-input"
+                  type="file"
+                  accept={PROMPT_AUDIO_ACCEPT}
+                  onChange={(event) => void uploadPromptAudio(event.target.files)}
+                />
+                <div className="question-actions">
+                  <button
+                    className="icon-button small audio-upload-button"
+                    type="button"
+                    onClick={() => promptAudioInputRef.current?.click()}
+                    title={t.uploadAudioFile}
+                    aria-label={t.uploadAudioFile}
+                    disabled={isTranscribing || isRecording}
+                  >
+                    <Upload size={16} />
+                  </button>
+                  <button
+                    className={`icon-button small record-button${isRecording ? ' recording' : ''}`}
+                    type="button"
+                    onClick={() => void toggleRecording()}
+                    title={isRecording ? t.stopRecording : t.startRecording}
+                    aria-label={isRecording ? t.stopRecording : t.startRecording}
+                    disabled={isTranscribing}
+                  >
+                    {isTranscribing ? (
+                      <Loader2 className="spin" size={16} />
+                    ) : isRecording ? (
+                      <MicOff size={16} />
+                    ) : (
+                      <Mic size={16} />
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -2002,26 +2531,22 @@ function App() {
             </div>
             {isHistoryExpanded ? (
               <div className="history-actions">
-                <button
-                  className="icon-button small"
-                  type="button"
-                  onClick={() => void loadHistory()}
-                  title={t.refreshHistoryTitle}
-                  aria-label={t.refreshHistoryAria}
-                >
-                  <RefreshCw size={16} />
-                </button>
-                <button
-                  className="danger-button compact"
-                  type="button"
-                  onClick={() => void clearHistory()}
-                  disabled={!historyItems.length}
-                  title={t.clearHistoryTitle}
-                  aria-label={t.clearHistoryAria}
-                >
-                  <Trash2 size={15} />
-                  {t.clearHistory}
-                </button>
+                <OverflowMenu showLabel items={[
+                  {
+                    key: 'refresh',
+                    icon: <RefreshCw size={14} />,
+                    label: t.refreshHistoryTitle,
+                    onClick: () => void loadHistory(),
+                  },
+                  {
+                    key: 'clear',
+                    icon: <Trash2 size={14} />,
+                    label: t.clearHistory,
+                    onClick: () => void clearHistory(),
+                    disabled: !historyItems.length,
+                    className: 'danger',
+                  },
+                ]} />
               </div>
             ) : null}
           </div>
@@ -2112,7 +2637,7 @@ function App() {
         </div>
       ) : null}
 
-      {moveCandidate ? (
+      {moveCandidates?.length ? (
         <div className="modal-backdrop" onClick={closeMoveModal}>
           <div
             className="move-modal"
@@ -2123,20 +2648,22 @@ function App() {
           >
             <div>
               <h2 id="move-file-modal-title">{t.moveFileModalTitle}</h2>
-              <p>{t.moveFileModalText(moveCandidate.name)}</p>
+              <p>
+                {moveCandidates.length === 1
+                  ? t.moveFileModalText(moveCandidates[0].name)
+                  : t.moveFilesModalText(moveCandidates.length)}
+              </p>
             </div>
             {moveError ? <p className="error-text">{moveError}</p> : null}
             <div className="move-list-options">
-              {docLists.map((list) => {
-                const slashIdx = moveCandidate.id.lastIndexOf('/')
-                const currentFolder = slashIdx === -1 ? '' : moveCandidate.id.slice(0, slashIdx)
-                const isCurrent = list.folder === currentFolder
+              {allDocLists.map((list) => {
+                const isCurrent = moveCandidates.every((file) => getDocumentFolder(file.id) === list.folder)
                 return (
                   <button
                     key={list.id}
                     type="button"
                     className={`move-list-option${isCurrent ? ' is-current' : ''}`}
-                    onClick={() => { void moveFileToList(moveCandidate, list) }}
+                    onClick={() => { void moveFilesToList(moveCandidates, list) }}
                     disabled={isCurrent || isMoveLoading}
                   >
                     {isMoveLoading ? <Loader2 className="spin" size={16} /> : <FolderPlus size={16} />}
@@ -2150,6 +2677,107 @@ function App() {
                 {t.cancelCreateList}
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {uploadSnackbar ? (
+        <div
+          className={`snackbar snackbar-${uploadSnackbar.kind}`}
+          role={uploadSnackbar.kind === 'error' ? 'alert' : 'status'}
+          aria-live={uploadSnackbar.kind === 'error' ? 'assertive' : 'polite'}
+        >
+          <span className="snackbar-text">
+            {uploadSnackbar.kind === 'loading' ? <Loader2 className="spin" size={16} /> : null}
+            {uploadSnackbar.text}
+          </span>
+          {uploadSnackbar.kind === 'loading' ? null : (
+            <div className="snackbar-actions">
+              {uploadSnackbar.onRetry ? (
+                <button
+                  type="button"
+                  className="snackbar-retry"
+                  onClick={() => {
+                    const retry = uploadSnackbar.onRetry
+                    setUploadSnackbar(null)
+                    retry?.()
+                  }}
+                >
+                  {t.retryUpload}
+                </button>
+              ) : null}
+              <button type="button" onClick={() => setUploadSnackbar(null)}>
+                {t.closeMessage}
+              </button>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {diagnosticMessage ? (
+        <div className="diagnostic-panel" role="alert" aria-live="assertive">
+          <div>
+            <strong>Diagnostic error</strong>
+            <p>{diagnosticMessage}</p>
+          </div>
+          <button type="button" onClick={() => setDiagnosticMessage('')}>
+            {t.closeMessage}
+          </button>
+        </div>
+      ) : null}
+
+      {galleryIndex !== null && galleryItems.length > 0 ? (
+        <div
+          className="gallery-backdrop"
+          onClick={closeGalleryModal}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t.gallery}
+        >
+          <div className="gallery-header" onClick={(e) => e.stopPropagation()}>
+            <span className="gallery-count">
+              {t.galleryCount(galleryIndex + 1, galleryItems.length)}
+            </span>
+            <span className="gallery-filename">{galleryItems[galleryIndex]?.name}</span>
+            <button
+              type="button"
+              className="gallery-close icon-button"
+              onClick={closeGalleryModal}
+              title={t.closeGallery}
+              aria-label={t.closeGallery}
+            >
+              <X size={20} />
+            </button>
+          </div>
+          <div className="gallery-image-area" onClick={(e) => e.stopPropagation()}>
+            {galleryIndex > 0 ? (
+              <button
+                type="button"
+                className="gallery-nav gallery-prev"
+                onClick={() => setGalleryIndex(galleryIndex - 1)}
+                title={t.galleryPrev}
+                aria-label={t.galleryPrev}
+              >
+                <ChevronLeft size={28} />
+              </button>
+            ) : null}
+            <img
+              key={galleryItems[galleryIndex]?.id}
+              src={fileContentUrl(galleryItems[galleryIndex]?.id ?? '')}
+              alt={galleryItems[galleryIndex]?.name}
+              className="gallery-image"
+            />
+            {galleryIndex < galleryItems.length - 1 ? (
+              <button
+                type="button"
+                className="gallery-nav gallery-next"
+                onClick={() => setGalleryIndex(galleryIndex + 1)}
+                title={t.galleryNext}
+                aria-label={t.galleryNext}
+              >
+                <ChevronRight size={28} />
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -2170,6 +2798,9 @@ function DocumentTypeIcon({ documentType }: { documentType: string }) {
   if (documentType === 'image') {
     return <ImageIcon className="file-type-icon" size={19} aria-hidden="true" />
   }
+  if (documentType === 'video') {
+    return <Video className="file-type-icon" size={19} aria-hidden="true" />
+  }
 
   return <FileText className="file-type-icon" size={19} aria-hidden="true" />
 }
@@ -2183,6 +2814,9 @@ function formatDocumentType(documentType: string, language: Language) {
   }
   if (documentType === 'image') {
     return language === 'pl' ? 'obraz' : 'image'
+  }
+  if (documentType === 'video') {
+    return language === 'pl' ? 'wideo' : 'video'
   }
 
   return documentType
@@ -2218,6 +2852,30 @@ function splitDocumentName(name: string) {
     stem: name.slice(0, extensionStart),
     suffix: name.slice(extensionStart),
   }
+}
+
+function getDocumentFolder(documentId: string) {
+  const slashIdx = documentId.lastIndexOf('/')
+  return slashIdx === -1 ? '' : documentId.slice(0, slashIdx)
+}
+
+function buildDocLists(documents: DocsFile[], extraLists: DocList[]) {
+  const folders = new Set<string>()
+  documents.forEach((doc) => {
+    const folder = getDocumentFolder(doc.id)
+    if (folder) {
+      folders.add(folder)
+    }
+  })
+
+  const fromFiles: DocList[] = [...folders].sort().map((folder) => ({
+    id: folder,
+    name: folder,
+    folder,
+  }))
+  const extra = extraLists.filter((list) => list.folder !== '' && !folders.has(list.folder))
+
+  return [{ id: DODANE_LIST_ID, name: 'Dodane', folder: '' }, ...fromFiles, ...extra]
 }
 
 function normalizeAnswer(data: DocsChatResponse) {
@@ -2317,8 +2975,36 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
 }
 
+function stringifyDiagnosticValue(value: unknown) {
+  if (value instanceof Error) {
+    return value.stack || value.message
+  }
+  if (typeof value === 'string') {
+    return value
+  }
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function fetchRequestLabel(request: Parameters<typeof fetch>[0]) {
+  if (typeof request === 'string') {
+    return request
+  }
+  if (request instanceof URL) {
+    return request.toString()
+  }
+  return request.url
+}
+
 function encodeDocumentId(documentId: string) {
   return documentId.split('/').map(encodeURIComponent).join('/')
+}
+
+function fileContentUrl(fileId: string): string {
+  return `${API_BASE_URL}/api/docs/files/${encodeDocumentId(fileId)}/content`
 }
 
 function parseDisplayAnswer(rawAnswer: string): DisplayAnswer {
@@ -2393,6 +3079,16 @@ function getInitialLanguage(): Language {
   return savedLanguage === 'en' ? 'en' : 'pl'
 }
 
+function getInitialExtraLists(): DocList[] {
+  try {
+    const stored = localStorage.getItem(EXTRA_LISTS_STORAGE_KEY)
+    if (stored) return JSON.parse(stored) as DocList[]
+  } catch {
+    // ignore
+  }
+  return []
+}
+
 function pluralFilesPl(count: number) {
   if (count === 1) {
     return '1 plik'
@@ -2405,6 +3101,94 @@ function pluralFilesPl(count: number) {
   }
 
   return `${count} plików`
+}
+
+interface IndeterminateCheckboxProps extends React.InputHTMLAttributes<HTMLInputElement> {
+  indeterminate?: boolean
+}
+
+function IndeterminateCheckbox({ indeterminate, ...props }: IndeterminateCheckboxProps) {
+  const ref = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.indeterminate = indeterminate ?? false
+    }
+  }, [indeterminate])
+
+  return <input type="checkbox" ref={ref} {...props} />
+}
+
+function OverflowMenu({ items, showLabel }: { items: OverflowMenuItem[]; showLabel?: boolean }) {
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState({ top: 0, right: 0 })
+
+  const openMenu = () => {
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (rect) {
+      setPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right })
+    }
+    setOpen(true)
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const handleKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (triggerRef.current?.contains(target)) return
+      const portal = document.querySelector('[data-overflow-portal]')
+      if (portal?.contains(target)) return
+      setOpen(false)
+    }
+    document.addEventListener('keydown', handleKey)
+    document.addEventListener('mousedown', handleClick)
+    return () => {
+      document.removeEventListener('keydown', handleKey)
+      document.removeEventListener('mousedown', handleClick)
+    }
+  }, [open])
+
+  return (
+    <div className="overflow-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`overflow-trigger${showLabel ? ' overflow-trigger--labeled' : ' overflow-trigger--dot'}`}
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={open ? () => setOpen(false) : openMenu}
+        title="Więcej opcji"
+      >
+        <MoreHorizontal size={14} />
+        {showLabel && <span>Więcej</span>}
+      </button>
+      {open && createPortal(
+        <div
+          className="overflow-dropdown"
+          style={{ top: pos.top, right: pos.right }}
+          data-overflow-portal=""
+        >
+          {items.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className={`overflow-item${item.className ? ` ${item.className}` : ''}`}
+              disabled={item.disabled}
+              onClick={() => { item.onClick(); setOpen(false) }}
+            >
+              {item.icon}
+              {item.label}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </div>
+  )
 }
 
 export default App

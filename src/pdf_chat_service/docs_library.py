@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 import re
 import shutil
@@ -11,6 +13,7 @@ from pdf_chat_service.image import (
     DEFAULT_IMAGE_CHAT_URL,
     IMAGE_SUFFIXES,
 )
+from pdf_chat_service.video import VIDEO_SUFFIXES
 
 
 SUPPORTED_DOCUMENT_SUFFIXES = {
@@ -18,6 +21,7 @@ SUPPORTED_DOCUMENT_SUFFIXES = {
     ".md": "markdown",
     ".markdown": "markdown",
     **{suffix: "image" for suffix in IMAGE_SUFFIXES},
+    **{suffix: "video" for suffix in VIDEO_SUFFIXES},
 }
 UPLOAD_FILENAME_PATTERN = re.compile(r"[^A-Za-z0-9._ -]+")
 
@@ -157,12 +161,58 @@ def list_library_documents(docs_dir: Path) -> list[LibraryDocument]:
     return documents
 
 
+COUNTS_CACHE_FILENAME = "_counts.json"
+
+
+def count_docs_by_folder(docs_dir: Path) -> dict[str, int]:
+    """Return a mapping of folder name → file count for all supported files in docs_dir."""
+    root = docs_dir.resolve()
+    if not root.exists() or not root.is_dir():
+        return {}
+    counts: dict[str, int] = {}
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if SUPPORTED_DOCUMENT_SUFFIXES.get(path.suffix.lower()) is None:
+            continue
+        rel = path.relative_to(root)
+        folder = str(rel.parent) if rel.parent != Path(".") else ""
+        counts[folder] = counts.get(folder, 0) + 1
+    return counts
+
+
+def read_counts_cache(docs_dir: Path) -> dict[str, object] | None:
+    cache_path = docs_dir / COUNTS_CACHE_FILENAME
+    try:
+        data = json.loads(cache_path.read_text())
+        if not isinstance(data, dict):
+            return None
+        counts_raw = data.get("counts", data)  # support old flat format
+        counts = {str(k): int(v) for k, v in counts_raw.items() if k != "lastUpdateDate"}
+        last_update = data.get("lastUpdateDate")
+        return {"counts": counts, "lastUpdateDate": last_update}
+    except Exception:
+        pass
+    return None
+
+
+def write_counts_cache(docs_dir: Path) -> None:
+    counts = count_docs_by_folder(docs_dir)
+    cache_path = docs_dir / COUNTS_CACHE_FILENAME
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "counts": counts,
+        "lastUpdateDate": datetime.now(timezone.utc).isoformat(),
+    }
+    cache_path.write_text(json.dumps(payload))
+
+
 def validate_library_upload(*, filename: str | None, file_bytes: bytes) -> str:
     clean_name = normalize_upload_filename(filename)
     if not file_bytes:
         raise DocumentLibraryError("Uploaded file is empty.")
     if SUPPORTED_DOCUMENT_SUFFIXES.get(Path(clean_name).suffix.lower()) is None:
-        raise DocumentLibraryError("Only PDF, Markdown, and image files are supported.")
+        raise DocumentLibraryError("Only PDF, Markdown, image, and video files are supported.")
     return clean_name
 
 
@@ -450,7 +500,7 @@ def resolve_library_document(*, docs_dir: Path, document_id: str) -> LibraryDocu
 
     document_type = SUPPORTED_DOCUMENT_SUFFIXES.get(candidate.suffix.lower())
     if document_type is None:
-        raise DocumentLibraryError("Only PDF, Markdown, and image files are supported.")
+        raise DocumentLibraryError("Only PDF, Markdown, image, and video files are supported.")
     if not candidate.is_file():
         raise DocumentLibraryError(f"Document was not found: {document_id}")
 
