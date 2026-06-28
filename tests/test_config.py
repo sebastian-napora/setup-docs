@@ -36,6 +36,12 @@ def test_audio_transcriptions_url_defaults_to_asr_endpoint_on_chat_host() -> Non
     )
 
 
+def test_default_chat_model_is_minimax_m2_7() -> None:
+    settings = Settings()
+
+    assert settings.chat_model == "MiniMax-M2.7"
+
+
 def test_audio_transcriptions_url_normalizes_local_bind_address_to_asr_port() -> None:
     settings = Settings(
         chat_completions_url="http://0.0.0.0:11112/v1/chat/completions",

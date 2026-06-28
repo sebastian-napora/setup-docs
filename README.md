@@ -16,7 +16,7 @@ Compress:  http://0.0.0.0:11112/compress
 Default model:
 
 ```text
-RedHatAI/Qwen3.6-35B-A3B-NVFP4
+MiniMax-M2.7
 ```
 
 ## Setup
@@ -127,7 +127,7 @@ to analyze image files, then sends this body to the model endpoint:
     }
   ],
   "stream": false,
-  "model": "RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+  "model": "MiniMax-M2.7"
 }
 ```
 
@@ -149,8 +149,9 @@ permanently delete archived files after typing `USUWAM`, select text/image files
 checkboxes, and send the selected text plus your question to the model. Video files
 are stored and organized, but skipped for AI text extraction and embeddings. Enable
 the `Embed` checkbox before adding files to send each extractable uploaded file to the
-configured local RAG ingest endpoint. The app extracts
-the upload text and sends the local RAG service the JSON ingest shape
+configured local RAG ingest endpoint. PDFs, Markdown files, and images are all
+extractable and embeddable here; only video files are skipped. The app extracts the
+upload text and sends the local RAG service the JSON ingest shape
 `{"text": "...", "source": "...", "collection": "default"}`. The local RAG service
 chunks it, embeds each chunk, and stores the persistent chunk text, vectors, and
 metadata in `./rag_data/rag.sqlite3`. Query embeddings are temporary during
@@ -286,7 +287,7 @@ Optional settings:
 PROMPT_PREFIX="Summarize this document:" ./load_docs.sh
 FILE_CHAT_URL="http://localhost:8080/file/chat" ./load_docs.sh
 DOCS_DIR="./docs" ./load_docs.sh
-MODEL="RedHatAI/Qwen3.6-35B-A3B-NVFP4" ./load_docs.sh
+MODEL="MiniMax-M2.7" ./load_docs.sh
 ```
 
 ## Configuration
@@ -295,7 +296,7 @@ Environment variables:
 
 ```bash
 export CHAT_COMPLETIONS_URL="http://0.0.0.0:11112/v1/chat/completions"
-export CHAT_MODEL="RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+export CHAT_MODEL="MiniMax-M2.7"
 export REQUEST_TIMEOUT_SECONDS="120"
 export MAX_PDF_CHARS="120000"
 export IMAGE_CHAT_URL="http://0.0.0.0:11112/v1/chat/image"
